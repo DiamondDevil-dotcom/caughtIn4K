@@ -434,23 +434,8 @@ def list_devices() -> Dict[str, List[Dict[str, Any]]]:
     try:
         return {"devices": [website_device(device) for device in router_devices() if not is_calibration_device(device)]}
     except Exception:
-        return {
-            "devices": [
-                {
-                    "device_id": d["device_id"],
-                    "name": d["name"],
-                    "class_index": d.get("class_index", 0),
-                    "mac": f"02:00:00:00:00:{idx+10:02d}",
-                    "ip_address": f"192.168.50.{idx+10}",
-                    "status": "SAFE" if idx != 2 else "WARNING",
-                    "prediction": "Benign" if idx != 2 else "Attack",
-                    "attack_probability": 5 if idx != 2 else 78,
-                    "blocked": False,
-                    "last_seen": time.time(),
-                }
-                for idx, d in enumerate(DEVICES)
-            ]
-        }
+        # No fake devices: returns clean empty list until real devices join the Pi Wi-Fi
+        return {"devices": []}
 
 
 @app.get("/alerts")
@@ -473,20 +458,7 @@ def list_alerts() -> Dict[str, List[Dict[str, Any]]]:
             ]
         }
     except Exception:
-        return {
-            "detections": [
-                {
-                    "device_id": alert.get("device_id", f"iot-device-{idx+1}"),
-                    "device": alert.get("device", DEVICES[idx % len(DEVICES)]["name"]),
-                    "label": alert.get("label", "Benign"),
-                    "confidence": float(alert.get("confidence", 0.95)),
-                    "status": "ALERT" if alert.get("label") == "Attack" else "SAFE",
-                    "ip_address": f"192.168.50.{10 + idx}",
-                    "timestamp": alert.get("timestamp", utc_now().strftime("%Y-%m-%d %H:%M:%S")),
-                }
-                for idx, alert in enumerate(ALERTS)
-            ]
-        }
+        return {"detections": []}
 
 
 @app.post("/devices/register")
