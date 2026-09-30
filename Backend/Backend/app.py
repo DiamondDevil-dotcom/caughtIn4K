@@ -253,11 +253,11 @@ app.add_middleware(
 )
 
 DEVICE_CATALOG: List[Dict[str, Any]] = [
-    {"device_id": "iot-101", "name": "Warehouse Sensor Cluster", "class_index": 0},
-    {"device_id": "iot-202", "name": "Water Pump Controller", "class_index": 1},
-    {"device_id": "iot-303", "name": "Traffic Light Hub", "class_index": 2},
-    {"device_id": "iot-404", "name": "Thermal Sensor Grid", "class_index": 3},
-    {"device_id": "iot-505", "name": "Forklift Automation Unit", "class_index": 4},
+    {"device_id": "iot-cam-01", "name": "Smart Security Camera (CCTV)", "class_index": 0},
+    {"device_id": "iot-thermo-02", "name": "Smart AC & Thermostat", "class_index": 1},
+    {"device_id": "iot-tv-03", "name": "Living Room Smart TV", "class_index": 2},
+    {"device_id": "iot-lock-04", "name": "Smart Door Lock Hub", "class_index": 3},
+    {"device_id": "iot-plug-05", "name": "Smart Plug & Sensor Grid", "class_index": 4},
 ]
 
 
@@ -289,14 +289,12 @@ DATASET_FRAME = _load_dataset_rows()
 
 
 def _device_catalog_from_dataset() -> List[Dict[str, Any]]:
-    rows = DATASET_FRAME.head(len(DEVICE_CATALOG)).copy()
     catalog = []
-    for index, device in enumerate(DEVICE_CATALOG):
-        row = rows.iloc[index] if index < len(rows) else rows.iloc[-1]
+    for device in DEVICE_CATALOG:
         catalog.append(
             {
                 "device_id": device["device_id"],
-                "name": row.get("label", device["name"]),
+                "name": device["name"],
                 "class_index": device["class_index"],
             }
         )
@@ -345,6 +343,7 @@ def _dataset_alerts() -> List[Dict[str, Any]]:
         alerts.append(
             {
                 "device_id": device["device_id"],
+                "device": device["name"],
                 "label": label,
                 "confidence": float(max(prob_map.values())),
                 "timestamp": (utc_now() - timedelta(minutes=5 * (index + 1))).strftime("%Y-%m-%d %H:%M:%S"),
@@ -477,15 +476,15 @@ def list_alerts() -> Dict[str, List[Dict[str, Any]]]:
         return {
             "detections": [
                 {
-                    "device_id": alert.get("device_id", "iot-101"),
-                    "device": alert.get("device_id", "Warehouse Sensor Cluster"),
+                    "device_id": alert.get("device_id", f"iot-device-{idx+1}"),
+                    "device": alert.get("device", DEVICES[idx % len(DEVICES)]["name"]),
                     "label": alert.get("label", "Benign"),
                     "confidence": float(alert.get("confidence", 0.95)),
                     "status": "ALERT" if alert.get("label") == "Attack" else "SAFE",
-                    "ip_address": "192.168.50.10",
+                    "ip_address": f"192.168.50.{10 + idx}",
                     "timestamp": alert.get("timestamp", utc_now().strftime("%Y-%m-%d %H:%M:%S")),
                 }
-                for alert in ALERTS
+                for idx, alert in enumerate(ALERTS)
             ]
         }
 
