@@ -1,0 +1,16 @@
+[
+    "Header_Length",
+    "syn_flag_number",
+    "rst_flag_number",
+    "HTTP",
+    "ARP",
+    "ICMP",
+    "LLC",
+    "Tot sum",
+    "Min",
+    "IAT",
+    "Number",
+    "Magnitue",
+    "Covariance",
+    "Weight"
+]
