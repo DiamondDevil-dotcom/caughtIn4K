@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-import '../providers/alert_provider.dart';
+import '../providers/activity_provider.dart';
+import '../providers/router_device_provider.dart';
 import '../widgets/liquid_glass_surface.dart';
 
 class ActivityScreen extends StatelessWidget {
@@ -10,7 +11,12 @@ class ActivityScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final alert = context.watch<AlertProvider>().result;
+    final activity = context.watch<ActivityProvider>();
+    final router = context.watch<RouterDeviceProvider>();
+    final fold = router.devices.where((device) {
+      final name = (device['name'] as String? ?? '').toLowerCase();
+      return name.contains('fold 8') || name.contains('galaxy fold');
+    }).toList();
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -26,70 +32,101 @@ class ActivityScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _liveActivity(alert),
-          const SizedBox(height: 6),
-
-          const ActivityTile(
-            time: "10:45 PM",
-            title: "Port Scan Blocked",
-            subtitle: "Amazon Alexa",
-            color: Colors.red,
-            icon: Icons.security,
+          _liveActivity(fold.isEmpty ? null : fold.first),
+          const SizedBox(height: 12),
+          Text(
+            "Recent Detections",
+            style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold),
           ),
-
-          const ActivityTile(
-            time: "10:42 PM",
-            title: "AI Scan Completed",
-            subtitle: "All Devices",
-            color: Colors.green,
-            icon: Icons.check_circle,
-          ),
-
-          const ActivityTile(
-            time: "10:38 PM",
-            title: "Device Authenticated",
-            subtitle: "Smart DVR",
-            color: Colors.blue,
-            icon: Icons.verified_user,
-          ),
-
-          const ActivityTile(
-            time: "10:31 PM",
-            title: "Camera Connected",
-            subtitle: "Front Door Camera",
-            color: Colors.orange,
-            icon: Icons.videocam,
-          ),
+          const SizedBox(height: 12),
+          if (activity.lastError != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Text(
+                "Router agent unreachable: ${activity.lastError}",
+                style: const TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          if (activity.events.isEmpty && activity.lastError == null)
+            const ActivityTile(
+              time: "--",
+              title: "No detections yet",
+              subtitle: "Events appear here as devices are classified",
+              color: Colors.grey,
+              icon: Icons.radar,
+            ),
+          ...activity.events.map(_eventTile),
         ],
       ),
     );
   }
 
-  Widget _liveActivity(Map<String, dynamic>? alert) {
-    final status = alert?["status"] as String? ?? "WAITING";
-    final hasResult = alert?["timestamp"] != null;
-    final isAlert = status == "ALERT";
-    final isSafe = status == "SAFE";
-    final color = isAlert
-        ? Colors.redAccent
-        : isSafe
-            ? Colors.greenAccent
-            : Colors.orangeAccent;
-    final timestamp = DateTime.tryParse(alert?["timestamp"] as String? ?? "");
+  Widget _eventTile(Map<String, dynamic> event) {
+    final status = event["status"] as String? ?? "SAFE";
+    final attackProbability = (event["attack_probability"] as num? ?? 0).toDouble();
+    final isAttack = status == "WARNING" || status == "ALERT" || status == "BLOCKED";
+    final confidence = isAttack ? attackProbability : 100 - attackProbability;
+    final confidenceLabel = isAttack ? "attack confidence" : "benign confidence";
+    final color = {
+          "SAFE": Colors.green,
+          "WARNING": Colors.orange,
+          "ALERT": Colors.red,
+          "BLOCKED": Colors.grey,
+        }[status] ??
+        Colors.blueGrey;
+    final icon = {
+          "SAFE": Icons.check_circle,
+          "WARNING": Icons.warning_amber_rounded,
+          "ALERT": Icons.error,
+          "BLOCKED": Icons.block,
+        }[status] ??
+        Icons.radar;
+    final timestamp = event["timestamp"] is num
+        ? DateTime.fromMillisecondsSinceEpoch((event["timestamp"] as num).toInt() * 1000)
+        : null;
     final time = timestamp == null
-        ? "Live"
+        ? "--"
         : "${timestamp.hour.toString().padLeft(2, '0')}:"
             "${timestamp.minute.toString().padLeft(2, '0')}:"
             "${timestamp.second.toString().padLeft(2, '0')}";
 
     return ActivityTile(
       time: time,
-      title: hasResult
-          ? "Live model: ${alert?["prediction"] ?? status}"
-          : "Waiting for live traffic",
-      subtitle: hasResult
-          ? "${alert?["device"] ?? "IoT Device"}  |  ${alert?["confidence"] ?? 0}% confidence"
-          : "Global model stream",
+      title: "${event["name"] ?? event["mac"] ?? "Device"}: $status",
+      subtitle: "${event["ip_address"] ?? "unknown ip"}  |  "
+          "${confidence.toStringAsFixed(2)}% $confidenceLabel",
+      color: color,
+      icon: icon,
+    );
+  }
+
+  Widget _liveActivity(Map<String, dynamic>? device) {
+    final status = device?["status"] as String? ?? "WAITING";
+    final isAlert = status == "ALERT" || status == "BLOCKED";
+    final isSafe = status == "SAFE";
+    final color = isAlert
+        ? Colors.redAccent
+        : isSafe
+            ? Colors.greenAccent
+            : Colors.orangeAccent;
+    final time = "Live";
+    final liveDevice = device;
+    final attackProbability = (device?["attack_probability"] as num? ?? 0).toDouble();
+    final confidence = isAlert || status == "WARNING"
+      ? attackProbability
+      : 100 - attackProbability;
+    final confidenceLabel = isAlert || status == "WARNING"
+      ? "attack confidence"
+      : "benign confidence";
+
+    return ActivityTile(
+      time: time,
+      title: liveDevice == null
+        ? "Waiting for live traffic"
+        : "Live model: ${liveDevice["prediction"] ?? status}",
+      subtitle: liveDevice == null
+        ? "Router telemetry stream"
+          : "${liveDevice["name"] ?? "IoT device"}  |  ${confidence.toStringAsFixed(2)}% $confidenceLabel",
       color: color,
       icon: isAlert
           ? Icons.warning_amber_rounded

@@ -10,6 +10,9 @@ import 'package:provider/provider.dart';
 
 import 'package:nyxis_security/main.dart';
 import 'package:nyxis_security/providers/alert_provider.dart';
+import 'package:nyxis_security/providers/auth_provider.dart';
+import 'package:nyxis_security/providers/device_provider.dart';
+import 'package:nyxis_security/providers/router_device_provider.dart';
 import 'package:nyxis_security/providers/theme_provider.dart';
 
 void main() {
@@ -19,6 +22,9 @@ void main() {
         providers: [
           ChangeNotifierProvider(create: (_) => AlertProvider()),
           ChangeNotifierProvider(create: (_) => ThemeProvider()),
+          ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => DeviceProvider()),
+          ChangeNotifierProvider(create: (_) => RouterDeviceProvider()),
         ],
         child: const NyxisApp(),
       ),

@@ -2,6 +2,7 @@ import '../models/device.dart';
 
 final List<Device> devices = [
   const Device(
+    id: "amazon-alexa",
     name: "Amazon Alexa",
     location: "Living Room",
     ip: "192.168.0.101",
@@ -10,6 +11,7 @@ final List<Device> devices = [
     firmware: "v3.2.1",
   ),
   const Device(
+    id: "security-camera",
     name: "Security Camera",
     location: "Front Door",
     ip: "192.168.0.102",
@@ -18,6 +20,7 @@ final List<Device> devices = [
     firmware: "v5.1.4",
   ),
   const Device(
+    id: "dvr",
     name: "DVR",
     location: "Office",
     ip: "192.168.0.103",

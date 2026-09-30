@@ -53,6 +53,8 @@ class DeviceCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(device.location),
               const SizedBox(height: 6),
+              Text("${device.ip}  |  ${device.mac}"),
+              const SizedBox(height: 6),
               Text(
                 device.safe
                     ? "Protected"

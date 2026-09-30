@@ -64,12 +64,14 @@ class NotificationService {
     await initialize();
     if (!_initialized) return;
 
-    final isAlert = status == "ALERT";
-    final title = isAlert
-        ? 'Threat detected'
-        : status == "SAFE"
-            ? 'Network protected'
-            : 'Traffic status updated';
+    final isAlert = status == "ALERT" || status == "BLOCKED";
+    final title = switch (status) {
+      "ALERT" => "Threat detected",
+      "BLOCKED" => "Device blocked",
+      "WARNING" => "Suspicious activity rising",
+      "SAFE" => "Network protected",
+      _ => "Traffic status updated",
+    };
     await _plugin.show(
       DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
       title,

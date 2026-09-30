@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import 'home_screen.dart';
 import 'devices_screen.dart';
 import 'activity_screen.dart';
 import 'settings_screen.dart';
+import 'demo_control_screen.dart';
+import '../providers/demo_mode_provider.dart';
 import '../widgets/liquid_glass_navigation.dart';
 
 class NavigationScreen extends StatefulWidget {
@@ -14,29 +17,45 @@ class NavigationScreen extends StatefulWidget {
 }
 
 class _NavigationScreenState extends State<NavigationScreen> {
-
   int currentIndex = 0;
+  late final PageController _pageController;
 
-  final List<Widget> pages = const [
-    HomeScreen(),
-    DevicesScreen(),
-    ActivityScreen(),
-    SettingsScreen(),
-  ];
+  List<Widget> _pages(bool demoMode) => [
+        const HomeScreen(),
+        const DevicesScreen(),
+        const ActivityScreen(),
+        const SettingsScreen(),
+        if (demoMode) const DemoControlScreen(),
+      ];
 
-  Alignment _backgroundAlignment = Alignment.topLeft;
+  List<(IconData, IconData, String)> _navItems(bool demoMode) => [
+        ...LiquidGlassNavigation.defaultItems,
+        if (demoMode) (Icons.science_outlined, Icons.science, "Demo"),
+      ];
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final demoMode = context.watch<DemoModeProvider>().enabled;
+    final pages = _pages(demoMode);
+    final safeIndex = currentIndex < pages.length ? currentIndex : 0;
     return Scaffold(
       backgroundColor: isDark
           ? const Color(0xFF0B1220)
           : const Color(0xFFF3F7F8),
-      body: AnimatedContainer(
-        duration: const Duration(milliseconds: 900),
-        curve: Curves.easeInOutCubic,
-        alignment: _backgroundAlignment,
+      body: DecoratedBox(
         decoration: BoxDecoration(
           gradient: RadialGradient(
             center: Alignment.topLeft,
@@ -54,37 +73,25 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   ],
           ),
         ),
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 460),
-          reverseDuration: const Duration(milliseconds: 360),
-          switchInCurve: Curves.easeOutQuart,
-          switchOutCurve: Curves.easeInQuart,
-          transitionBuilder: (child, animation) {
-            final offset = Tween<Offset>(
-              begin: const Offset(0.018, 0.012),
-              end: Offset.zero,
-            ).animate(animation);
-            return FadeTransition(
-              opacity: animation,
-              child: SlideTransition(position: offset, child: child),
-            );
-          },
-          child: KeyedSubtree(
-            key: ValueKey(currentIndex),
-            child: pages[currentIndex],
-          ),
+        child: PageView(
+          controller: _pageController,
+          physics: const NeverScrollableScrollPhysics(),
+          onPageChanged: (index) => setState(() => currentIndex = index),
+          children: pages,
         ),
       ),
 
       bottomNavigationBar: LiquidGlassNavigation(
-        selectedIndex: currentIndex,
+        items: _navItems(demoMode),
+        selectedIndex: safeIndex,
         onSelected: (index) {
-          setState(() {
-            currentIndex = index;
-            _backgroundAlignment = index.isEven
-                ? Alignment.topLeft
-                : Alignment.bottomRight;
-          });
+          if (index == currentIndex) return;
+          _pageController.animateToPage(
+            index,
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+          );
+          setState(() => currentIndex = index);
         },
       ),
     );

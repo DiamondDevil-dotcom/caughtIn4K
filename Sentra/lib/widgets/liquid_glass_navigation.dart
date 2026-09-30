@@ -5,14 +5,16 @@ import 'package:flutter/material.dart';
 class LiquidGlassNavigation extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;
+  final List<(IconData, IconData, String)>? items;
 
   const LiquidGlassNavigation({
     super.key,
     required this.selectedIndex,
     required this.onSelected,
+    this.items,
   });
 
-  static const items = [
+  static const defaultItems = [
     (Icons.home_outlined, Icons.home, "Home"),
     (Icons.devices_outlined, Icons.devices, "Devices"),
     (Icons.history, Icons.history, "Activity"),
@@ -23,6 +25,7 @@ class LiquidGlassNavigation extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final ink = isDark ? Colors.white : const Color(0xFF12202A);
+    final navItems = items ?? defaultItems;
     return SafeArea(
       top: false,
       child: Padding(
@@ -60,9 +63,9 @@ class LiquidGlassNavigation extends StatelessWidget {
                 ],
               ),
               child: Row(
-                children: List.generate(items.length, (index) {
+                children: List.generate(navItems.length, (index) {
                   final selected = index == selectedIndex;
-                  final item = items[index];
+                  final item = navItems[index];
                   return Expanded(
                     child: _NavigationItem(
                       selected: selected,
@@ -140,17 +143,12 @@ class _NavigationItemState extends State<_NavigationItem> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              AnimatedSwitcher(
+              AnimatedScale(
+                scale: widget.selected ? 1.08 : 1.0,
                 duration: const Duration(milliseconds: 260),
-                switchInCurve: Curves.easeOutBack,
-                switchOutCurve: Curves.easeIn,
-                transitionBuilder: (child, animation) => ScaleTransition(
-                  scale: animation,
-                  child: FadeTransition(opacity: animation, child: child),
-                ),
+                curve: Curves.easeOutBack,
                 child: Icon(
                   widget.icon,
-                  key: ValueKey(widget.icon),
                   size: 21,
                   color: widget.selected
                       ? Colors.white

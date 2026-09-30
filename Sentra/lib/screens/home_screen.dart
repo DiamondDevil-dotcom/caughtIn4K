@@ -4,6 +4,7 @@ import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/alert_provider.dart';
+import '../providers/router_device_provider.dart';
 import '../widgets/liquid_glass_button.dart';
 import 'alert_screen.dart';
 
@@ -15,45 +16,52 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool isScanning = false;
-  String? scanError;
-
-  Future<void> _scanNetwork() async {
-    final provider = context.read<AlertProvider>();
-    setState(() {
-      isScanning = true;
-      scanError = null;
-    });
-
-    try {
-      await provider.scanNetwork();
-      if (!mounted) return;
-      setState(() {
-        isScanning = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        scanError = error.toString();
-        isScanning = false;
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<AlertProvider>(context);
     final alert = provider.result;
+    final routerProvider = context.watch<RouterDeviceProvider>();
+    final routerDevices = routerProvider.devices;
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch / 1000;
+    final onlineDevices = routerDevices.where((device) {
+      final lastSeen = (device['last_seen'] as num?)?.toDouble();
+      return device['online'] == true ||
+          (lastSeen != null && nowSeconds - lastSeen <= 60);
+    }).toList()
+      ..sort((a, b) {
+        const priority = {
+          'BLOCKED': 4,
+          'ALERT': 3,
+          'WARNING': 2,
+          'SAFE': 1,
+        };
+        final statusOrder = (priority[b['status']] ?? 0)
+            .compareTo(priority[a['status']] ?? 0);
+        if (statusOrder != 0) return statusOrder;
+        final aNamed = (a['name'] as String? ?? '').toLowerCase() != 'unknown device';
+        final bNamed = (b['name'] as String? ?? '').toLowerCase() != 'unknown device';
+        if (aNamed != bNamed) return bNamed ? 1 : -1;
+        return ((b['last_seen'] as num?)?.toDouble() ?? 0)
+            .compareTo((a['last_seen'] as num?)?.toDouble() ?? 0);
+      });
+    final liveRouterDevice = onlineDevices.isEmpty ? null : onlineDevices.first;
 
-    final status = alert?["status"] as String? ?? "WAITING";
+    final status = liveRouterDevice?["status"] as String? ??
+        alert?["status"] as String? ??
+        "WAITING";
     final bool safe = status == "SAFE" || status == "WAITING";
-    final bool uncertain = status == "UNCERTAIN";
-    final double confidence = alert?["confidence"] is num
-      ? (alert!["confidence"] as num).toDouble() / 100
+    final bool uncertain = status == "WARNING" || status == "UNCERTAIN";
+    final double confidence = liveRouterDevice?["attack_probability"] is num
+      ? (liveRouterDevice!["attack_probability"] as num).toDouble() / 100
+      : alert?["confidence"] is num
+        ? (alert!["confidence"] as num).toDouble() / 100
       : 0.0;
-    final results = provider.scanResults;
-    final deviceCount = results.isEmpty ? 0 : results.length;
-    final threatCount = results.where((item) => item["status"] == "ALERT").length;
+    final deviceCount = onlineDevices.length;
+    final threatCount = onlineDevices.where(
+        (device) => device['status'] == 'WARNING' ||
+          device['status'] == 'ALERT' ||
+          device['status'] == 'BLOCKED',
+    ).length;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -71,9 +79,10 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           Text(
-            "Good Evening ",
+            "Network overview",
             style: GoogleFonts.spaceGrotesk(
-              fontSize: 18,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
               color: Theme.of(context).textTheme.bodyMedium?.color,
             ),
           ),
@@ -83,11 +92,11 @@ class _HomeScreenState extends State<HomeScreen> {
               ? (uncertain ? "Traffic needs more evidence." : "Everything looks secure.")
               : "Threat detected!",
             style: GoogleFonts.spaceGrotesk(
-              fontSize: 30,
+              fontSize: 28,
               fontWeight: FontWeight.bold,
             ),
           ),
-          const SizedBox(height: 25),
+          const SizedBox(height: 20),
 
           // Main Status Card
           Card(
@@ -126,10 +135,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   Text(
                     safe
-                      ? "Your network is secure."
+                        ? (liveRouterDevice == null
+                          ? "Waiting for Raspberry Pi telemetry."
+                          : "Monitoring ${onlineDevices.length} connected IoT ${onlineDevices.length == 1 ? "device" : "devices"}.")
                       : uncertain
-                          ? "Confidence: ${alert?["confidence"]}%\nCollecting more traffic..."
-                          : "${alert!["prediction"]}\nConfidence: ${alert["confidence"]}%",
+                          ? "Rising attack confidence: ${liveRouterDevice?["attack_probability"] ?? alert?["confidence"]}%\nMonitoring closely..."
+                          : "${liveRouterDevice?["prediction"] ?? alert?["prediction"]}\nConfidence: ${liveRouterDevice?["attack_probability"] ?? alert?["confidence"]}%",
                       textAlign: TextAlign.center,
                       style: GoogleFonts.spaceGrotesk(
                       color: Theme.of(context).textTheme.bodyMedium?.color,
@@ -162,9 +173,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           context,
                           MaterialPageRoute(
                             builder: (_) => AlertScreen(
-                            device: "IoT Device",
-                            attack: alert!["prediction"],
-                            confidence: "${alert["confidence"]}%",
+                            device: liveRouterDevice?["name"] ?? "IoT Device",
+                            attack: liveRouterDevice?["prediction"] ?? alert?["prediction"] ?? "Attack",
+                            confidence: "${liveRouterDevice?["attack_probability"] ?? alert?["confidence"]}%",
                           ),
                         ),
                       );
@@ -175,28 +186,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-
-          const SizedBox(height: 25),
-
-          LiquidGlassButton(
-            onPressed: isScanning ? null : _scanNetwork,
-            icon: isScanning
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.search_rounded),
-            label: isScanning ? "Scanning..." : "Scan Network",
-          ),
-
-          if (scanError != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              scanError!,
-              style: const TextStyle(color: Colors.redAccent),
-            ),
-          ],
 
           const SizedBox(height: 25),
 
@@ -223,92 +212,112 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
 
           const SizedBox(height: 20),
-
-          Text(
-            "Recent Activity",
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          const SizedBox(height: 12),
-          _recentActivity(provider),
-
-          if (results.isNotEmpty) ...[
-            const SizedBox(height: 25),
-            Text(
-              "Global Model Scan",
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-            ...results.map(_scanResultCard),
-          ],
+          _federatedModelCard(routerProvider),
         ],
       ),
     );
   }
 
-  Widget _recentActivity(AlertProvider provider) {
-    if (provider.notifications.isEmpty) {
-      return Card(
-        child: ListTile(
-          leading: const Icon(Icons.radar),
-          title: const Text("No scan activity yet"),
-          subtitle: const Text("Press Scan Network to begin"),
-        ),
-      );
-    }
+  Widget _federatedModelCard(RouterDeviceProvider provider) {
+    final status = provider.federatedStatus;
+    final training = status?['training'] is Map<String, dynamic>
+        ? status!['training'] as Map<String, dynamic>
+        : null;
+    final trainingRunning = training?['state'] == 'running';
+    final round = status?['federated_round'];
+    final updatedAt = status?['updated_at'];
+    final syncedAt = updatedAt is num
+        ? DateTime.fromMillisecondsSinceEpoch((updatedAt * 1000).round()).toLocal()
+        : null;
+    final syncedLabel = syncedAt == null
+        ? 'Sync time unavailable'
+        : 'Updated ${syncedAt.hour.toString().padLeft(2, '0')}:${syncedAt.minute.toString().padLeft(2, '0')}';
 
     return Card(
-      child: Column(
-        children: provider.notifications.take(3).map((event) {
-          final isAlert = event["status"] == "ALERT";
-          return ListTile(
-            leading: Icon(
-              isAlert ? Icons.warning_amber_rounded : Icons.check_circle,
-              color: isAlert ? Colors.redAccent : Colors.green,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.hub_outlined, color: Colors.cyan),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Federated model',
+                    style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Text(
+                  status?['aggregation'] as String? ?? 'Checking',
+                  style: const TextStyle(color: Colors.cyan, fontWeight: FontWeight.w600),
+                ),
+              ],
             ),
-            title: Text(
-              "${event["device"]}: ${event["prediction"]}",
+            const SizedBox(height: 12),
+            if (provider.federatedStatusError != null)
+              Text(
+                'Model status unavailable: ${provider.federatedStatusError}',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              )
+            else if (status == null)
+              const Text('Checking the Pi model checkpoint…')
+            else ...[
+              Text(
+                round is num && round > 0
+                    ? 'Pi has global model from round $round'
+                    : status['status'] == 'federated'
+                        ? 'Pi has received a federated global model'
+                        : 'Pi is using its pretrained model',
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '$syncedLabel  ·  ${status['feature_count'] ?? '—'} input features',
+                style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Laptop: coordinator + local trainer  ·  Pi: local trainer + gateway IDS',
+                style: GoogleFonts.spaceGrotesk(fontSize: 12),
+              ),
+            ],
+            if (training != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Training: ${training['state']}  ·  round ${training['current_round'] ?? 0}/${training['total_rounds'] ?? 10}',
+                style: TextStyle(color: Theme.of(context).textTheme.bodyMedium?.color),
+              ),
+            ],
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: provider.federatedTrainingStarting || trainingRunning
+                    ? null
+                    : provider.startFederatedTraining,
+                icon: provider.federatedTrainingStarting
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.sync_rounded),
+                label: Text(provider.federatedTrainingStarting
+                    ? 'Starting federated training…'
+                  : trainingRunning
+                    ? 'Training in progress'
+                    : 'Update global model'),
+              ),
             ),
-            subtitle: Text("${event["confidence"]}% confidence"),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  Widget _scanResultCard(Map<String, dynamic> result) {
-    final status = result["status"] as String? ?? "NO_DATA";
-    final isAlert = status == "ALERT";
-    final isSafe = status == "SAFE";
-    final color = isAlert
-        ? Colors.red
-        : isSafe
-            ? Colors.green
-            : Colors.orange;
-
-    return Card(
-      child: ListTile(
-        leading: Icon(
-          isAlert ? Icons.warning_rounded : Icons.devices,
-          color: color,
-        ),
-        title: Text(result["device"] as String? ?? "Unknown device"),
-        subtitle: Text(
-          status == "NO_DATA"
-              ? "No traffic telemetry received"
-              : "${result["prediction"]} - ${result["confidence"]}% confidence",
-        ),
-        trailing: Text(
-          status,
-          style: TextStyle(color: color, fontWeight: FontWeight.bold),
+            if (provider.federatedTrainingMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                provider.federatedTrainingMessage!,
+                style: TextStyle(
+                  color: provider.federatedTrainingMessage!.startsWith('Exception:')
+                      ? Theme.of(context).colorScheme.error
+                      : Theme.of(context).textTheme.bodyMedium?.color,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

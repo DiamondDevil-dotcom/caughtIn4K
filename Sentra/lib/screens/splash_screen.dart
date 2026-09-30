@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'navigation_screen.dart';
+import 'account_gate.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -15,6 +15,7 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animationController;
   late final Animation<double> _logoScale;
+  late final Animation<double> _logoRotation;
   late final Animation<double> _logoOpacity;
   late final Animation<double> _textOpacity;
   late final Animation<Offset> _textSlide;
@@ -31,6 +32,12 @@ class _SplashScreenState extends State<SplashScreen>
     _logoScale = CurvedAnimation(
       parent: _animationController,
       curve: const Interval(0, 0.72, curve: Curves.easeOutBack),
+    );
+    _logoRotation = Tween<double>(begin: -0.035, end: 0).animate(
+      CurvedAnimation(
+        parent: _animationController,
+        curve: const Interval(0, 0.68, curve: Curves.easeOutCubic),
+      ),
     );
     _logoOpacity = CurvedAnimation(
       parent: _animationController,
@@ -49,29 +56,11 @@ class _SplashScreenState extends State<SplashScreen>
     ));
 
     Timer(
-      const Duration(milliseconds: 2600),
+      const Duration(milliseconds: 2200),
       () {
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
-          PageRouteBuilder<void>(
-            transitionDuration: const Duration(milliseconds: 650),
-            reverseTransitionDuration: const Duration(milliseconds: 350),
-            pageBuilder: (_, animation, secondaryAnimation) =>
-                const NavigationScreen(),
-            transitionsBuilder: (_, animation, secondaryAnimation, child) {
-              final curve = CurvedAnimation(
-                parent: animation,
-                curve: Curves.easeOutCubic,
-              );
-              return FadeTransition(
-                opacity: curve,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.97, end: 1).animate(curve),
-                  child: child,
-                ),
-              );
-            },
-          ),
+          MaterialPageRoute<void>(builder: (_) => const AccountGate()),
         );
       },
     );
@@ -115,13 +104,16 @@ class _SplashScreenState extends State<SplashScreen>
                     children: [
                       Opacity(
                         opacity: _logoOpacity.value,
-                        child: Transform.scale(
-                          scale: 0.78 + (_logoScale.value * 0.22),
-                          child: Image.asset(
-                            "assets/images/caughtIn4k_logo.png",
-                            width: 250,
-                            height: 250,
-                            fit: BoxFit.contain,
+                        child: RotationTransition(
+                          turns: _logoRotation,
+                          child: Transform.scale(
+                            scale: 0.58 + (_logoScale.value * 0.42),
+                            child: Image.asset(
+                              "assets/images/caughtIn4k_logo.png",
+                              width: 250,
+                              height: 250,
+                              fit: BoxFit.contain,
+                            ),
                           ),
                         ),
                       ),

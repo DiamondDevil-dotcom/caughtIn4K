@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
-import '../data/devices.dart';
 
 class AlertProvider extends ChangeNotifier {
   Map<String, dynamic>? result;
@@ -50,9 +49,9 @@ class AlertProvider extends ChangeNotifier {
     }
   }
 
-  Future<Map<String, dynamic>> scanNetwork() async {
+  Future<Map<String, dynamic>> scanNetwork(List<String> deviceNames) async {
     final response = await ApiService.scanNetwork(
-      devices.map((device) => device.name).toList(),
+      deviceNames,
     );
     final allResults = List<Map<String, dynamic>>.from(response["devices"] ?? []);
     final liveResults = allResults

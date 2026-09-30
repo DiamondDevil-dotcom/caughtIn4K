@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -19,10 +20,10 @@ class AppTheme {
   static const Color lightTextPrimary = Color(0xFF12202A);
   static const Color lightTextSecondary = Color(0xFF52616B);
 
-  static PageTransitionsTheme pageTransitions = const PageTransitionsTheme(
+  static const PageTransitionsTheme pageTransitions = PageTransitionsTheme(
     builders: {
-      TargetPlatform.android: _GlassPageTransitionsBuilder(),
-      TargetPlatform.iOS: _GlassPageTransitionsBuilder(),
+      TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
     },
   );
 
@@ -176,36 +177,4 @@ class AppTheme {
     ),
     pageTransitionsTheme: pageTransitions,
   );
-}
-
-class _GlassPageTransitionsBuilder extends PageTransitionsBuilder {
-  const _GlassPageTransitionsBuilder();
-
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    final primaryCurve = CurvedAnimation(
-      parent: animation,
-      curve: Curves.easeOutQuart,
-      reverseCurve: Curves.easeInQuart,
-    );
-    return FadeTransition(
-      opacity: primaryCurve,
-      child: ScaleTransition(
-        scale: Tween<double>(begin: 0.985, end: 1).animate(primaryCurve),
-        child: SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0.018, 0.01),
-            end: Offset.zero,
-          ).animate(primaryCurve),
-          child: child,
-        ),
-      ),
-    );
-  }
 }
