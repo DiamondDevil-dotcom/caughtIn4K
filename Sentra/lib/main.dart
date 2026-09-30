@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'services/router_api_service.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
 import 'package:provider/provider.dart';
@@ -10,8 +11,11 @@ import 'providers/router_device_provider.dart';
 import 'providers/demo_mode_provider.dart';
 import 'providers/activity_provider.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await RouterApiService.init();
   runApp(
+
     MultiProvider(
       providers: [
         ChangeNotifierProvider(

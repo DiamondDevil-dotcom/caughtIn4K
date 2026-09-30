@@ -6,7 +6,9 @@ import '../providers/alert_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/demo_mode_provider.dart';
 import '../providers/router_device_provider.dart';
+import '../services/router_api_service.dart';
 import '../widgets/liquid_glass_surface.dart';
+
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -49,7 +51,23 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
 
+          const SizedBox(height: 15),
+          LiquidGlassSurface(
+            child: ListTile(
+              leading: const Icon(Icons.cloud_sync_outlined),
+              title: const Text('Gateway / Server URL'),
+              subtitle: Text(
+                RouterApiService.baseUrl,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+              onTap: () => _showServerSettings(context),
+            ),
+          ),
+
           const SizedBox(height: 20),
+
 
           LiquidGlassSurface(
             child: SwitchListTile(
@@ -196,4 +214,92 @@ class SettingsScreen extends StatelessWidget {
     next.dispose();
     confirm.dispose();
   }
-}
+
+  Future<void> _showServerSettings(BuildContext context) async {
+    final controller = TextEditingController(text: RouterApiService.baseUrl);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setModalState) => AlertDialog(
+          title: const Text('Gateway / Server URL'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Select connection mode or enter custom address:',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.cloud_outlined, size: 16),
+                      label: const Text('Cloud Tunnel'),
+                      onPressed: () {
+                        setModalState(() {
+                          controller.text = 'https://stimuli-clubhouse-frozen.ngrok-free.dev';
+                        });
+                      },
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.wifi, size: 16),
+                      label: const Text('Local AP Wi-Fi'),
+                      onPressed: () {
+                        setModalState(() {
+                          controller.text = 'http://192.168.50.1:8001';
+                        });
+                      },
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.public, size: 16),
+                      label: const Text('Render Cloud'),
+                      onPressed: () {
+                        setModalState(() {
+                          controller.text = 'https://caughtin4k.onrender.com';
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    labelText: 'Server URL',
+                    hintText: 'https://...',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final newUrl = controller.text.trim();
+                if (newUrl.isEmpty) return;
+                await RouterApiService.setBaseUrl(newUrl);
+                if (!dialogContext.mounted) return;
+                Navigator.pop(dialogContext);
+                context.read<RouterDeviceProvider>().startPolling();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Connected to: $newUrl')),
+                );
+              },
+              child: const Text('Save & Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+}

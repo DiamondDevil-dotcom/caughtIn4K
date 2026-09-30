@@ -1,16 +1,51 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Talks directly to the router-mode IDS agent running on the Raspberry Pi
-/// (see router_ids_agent.py), which now hosts the model and blocking logic.
+/// or via the Cloud/Ngrok gateway.
 class RouterApiService {
-  static const String baseUrl = String.fromEnvironment(
-    "ROUTER_API_URL",
-    defaultValue: "http://10.170.97.102:8001",
-  );
+  static const String _defaultUrl = "https://stimuli-clubhouse-frozen.ngrok-free.dev";
+  static String _customBaseUrl = "";
+
+  static String get baseUrl {
+    if (_customBaseUrl.isNotEmpty) return _customBaseUrl;
+    const envUrl = String.fromEnvironment("ROUTER_API_URL", defaultValue: "");
+    if (envUrl.isNotEmpty) return envUrl;
+    return _defaultUrl;
+  }
+
+  static Future<void> init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _customBaseUrl = prefs.getString("custom_router_api_url") ?? "";
+    } catch (_) {}
+  }
+
+  static Future<void> setBaseUrl(String url) async {
+    _customBaseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString("custom_router_api_url", _customBaseUrl);
+    } catch (_) {}
+  }
+
+  static Map<String, String> _headers([Map<String, String>? extra]) {
+    final Map<String, String> h = {
+      "ngrok-skip-browser-warning": "true",
+      "User-Agent": "caughtIn4K-mobile/1.0",
+    };
+    if (extra != null) {
+      h.addAll(extra);
+    }
+    return h;
+  }
 
   static Future<List<Map<String, dynamic>>> devices() async {
-    final response = await http.get(Uri.parse("$baseUrl/devices"));
+    final response = await http.get(
+      Uri.parse("$baseUrl/devices"),
+      headers: _headers(),
+    );
 
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -23,7 +58,10 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> federatedStatus() async {
-    final response = await http.get(Uri.parse("$baseUrl/federated-status"));
+    final response = await http.get(
+      Uri.parse("$baseUrl/federated-status"),
+      headers: _headers(),
+    );
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
@@ -33,7 +71,10 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> startFederatedTraining() async {
-    final response = await http.post(Uri.parse("$baseUrl/federated/start"));
+    final response = await http.post(
+      Uri.parse("$baseUrl/federated/start"),
+      headers: _headers({"Content-Type": "application/json"}),
+    );
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode == 200 && body["success"] == true) return body;
     throw Exception(body["detail"] ?? body["message"] ?? "Could not start federated training.");
@@ -46,7 +87,7 @@ class RouterApiService {
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/devices/register"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({
         "name": name,
         "mac": mac,
@@ -60,14 +101,20 @@ class RouterApiService {
   }
 
   static Future<void> deleteDevice(String mac) async {
-    final response = await http.delete(Uri.parse("$baseUrl/devices/$mac"));
+    final response = await http.delete(
+      Uri.parse("$baseUrl/devices/$mac"),
+      headers: _headers(),
+    );
     if (response.statusCode != 200) {
       throw Exception("Device deletion failed: ${response.body}");
     }
   }
 
   static Future<Map<String, dynamic>> block(String mac) async {
-    final response = await http.post(Uri.parse("$baseUrl/devices/$mac/block"));
+    final response = await http.post(
+      Uri.parse("$baseUrl/devices/$mac/block"),
+      headers: _headers(),
+    );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -79,7 +126,10 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> unblock(String mac) async {
-    final response = await http.post(Uri.parse("$baseUrl/devices/$mac/unblock"));
+    final response = await http.post(
+      Uri.parse("$baseUrl/devices/$mac/unblock"),
+      headers: _headers(),
+    );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -100,7 +150,7 @@ class RouterApiService {
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/telemetry"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({
         "device": device,
         "mac": mac,
@@ -120,7 +170,10 @@ class RouterApiService {
   }
 
   static Future<List<Map<String, dynamic>>> events({int limit = 50}) async {
-    final response = await http.get(Uri.parse("$baseUrl/events?limit=$limit"));
+    final response = await http.get(
+      Uri.parse("$baseUrl/events?limit=$limit"),
+      headers: _headers(),
+    );
 
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
@@ -139,7 +192,7 @@ class RouterApiService {
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/auth/signup"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({"name": name, "email": email, "password": password}),
     );
 
@@ -158,7 +211,7 @@ class RouterApiService {
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/auth/login"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({"email": email, "password": password}),
     );
 
@@ -178,7 +231,7 @@ class RouterApiService {
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/auth/change-password"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({
         "email": email,
         "current_password": currentPassword,
@@ -191,7 +244,7 @@ class RouterApiService {
   static Future<Map<String, dynamic>> requestPasswordReset(String email) async {
     final response = await http.post(
       Uri.parse("$baseUrl/auth/request-password-reset"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({"email": email}),
     );
     return jsonDecode(response.body);
@@ -204,7 +257,7 @@ class RouterApiService {
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/auth/reset-password"),
-      headers: {"Content-Type": "application/json"},
+      headers: _headers({"Content-Type": "application/json"}),
       body: jsonEncode({
         "email": email,
         "token": token,
