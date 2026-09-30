@@ -88,12 +88,17 @@ def _laptop_ip_for_router() -> str:
 
 
 def router_request(method: str, path: str, **kwargs) -> Any:
+    headers = kwargs.pop("headers", {})
+    headers.setdefault("ngrok-skip-browser-warning", "true")
+    headers.setdefault("User-Agent", "caughtIn4K-cloud-agent/1.0")
     try:
-        response = httpx.request(method, f"{ROUTER_API_URL}{path}", timeout=8, **kwargs)
+        response = httpx.request(method, f"{ROUTER_API_URL}{path}", headers=headers, timeout=10, **kwargs)
         response.raise_for_status()
         return response.json()
     except httpx.HTTPError as error:
+        print(f"[ROUTER REQUEST ERROR] {method} {ROUTER_API_URL}{path}: {error}")
         raise HTTPException(status_code=502, detail=f"Router API unavailable: {error}") from error
+
 
 
 def router_devices() -> List[Dict[str, Any]]:
@@ -429,13 +434,38 @@ def health() -> Dict[str, Any]:
     return {"status": "ok"}
 
 
+@app.get("/debug/router")
+def debug_router() -> Dict[str, Any]:
+    headers = {
+        "ngrok-skip-browser-warning": "true",
+        "User-Agent": "caughtIn4K-cloud-agent/1.0",
+    }
+    target = f"{ROUTER_API_URL}/devices"
+    try:
+        res = httpx.get(target, headers=headers, timeout=10)
+        return {
+            "configured_router_url": ROUTER_API_URL,
+            "target": target,
+            "status_code": res.status_code,
+            "content_preview": res.text[:500],
+        }
+    except Exception as err:
+        return {
+            "configured_router_url": ROUTER_API_URL,
+            "target": target,
+            "error": str(err),
+        }
+
+
 @app.get("/devices")
 def list_devices() -> Dict[str, List[Dict[str, Any]]]:
     try:
-        return {"devices": [website_device(device) for device in router_devices() if not is_calibration_device(device)]}
-    except Exception:
-        # No fake devices: returns clean empty list until real devices join the Pi Wi-Fi
+        raw = router_devices()
+        return {"devices": [website_device(device) for device in raw if not is_calibration_device(device)]}
+    except Exception as err:
+        print(f"[LIST DEVICES ERROR] Failed to fetch router devices: {err}")
         return {"devices": []}
+
 
 
 @app.get("/alerts")
