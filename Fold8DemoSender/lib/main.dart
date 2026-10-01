@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -72,13 +73,13 @@ class _SenderHomePageState extends State<SenderHomePage> {
   final TextEditingController _ipController = TextEditingController(
     text: const String.fromEnvironment(
       'FOLD_DEVICE_IP',
-      defaultValue: '192.168.50.86',
+      defaultValue: '192.168.50.143',
     ),
   );
   final TextEditingController _macController = TextEditingController(
     text: const String.fromEnvironment(
       'FOLD_DEVICE_MAC',
-      defaultValue: '08:02:3c:79:25:40',
+      defaultValue: '60:b4:a2:2b:44:48',
     ),
   );
 
@@ -92,7 +93,36 @@ class _SenderHomePageState extends State<SenderHomePage> {
   @override
   void initState() {
     super.initState();
+    _detectLocalNetwork();
     WidgetsBinding.instance.addPostFrameCallback((_) => _startNormalStream());
+  }
+
+  Future<void> _detectLocalNetwork() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (addr.address.startsWith('192.168.50.')) {
+            if (mounted) {
+              setState(() {
+                _ipController.text = addr.address;
+                if (addr.address == '192.168.50.143') {
+                  _macController.text = '60:b4:a2:2b:44:48';
+                } else if (addr.address == '192.168.50.86') {
+                  _macController.text = '08:02:3c:79:25:40';
+                } else if (addr.address == '192.168.50.22') {
+                  _macController.text = '34:f0:84:2b:1d:8a';
+                }
+              });
+            }
+            return;
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   @override
