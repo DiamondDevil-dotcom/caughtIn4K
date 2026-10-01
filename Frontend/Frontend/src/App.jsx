@@ -635,7 +635,7 @@ function DevicesView({ devices, alerts, federatedStatus, onAdded }) {
         { method: "DELETE" },
       );
       const data = await response.json();
-      if (!response.ok || data.success !== true)
+      if (!response.ok)
         throw new Error(data.detail || "Could not remove device");
       await onAdded();
     } catch (requestError) {
@@ -760,9 +760,8 @@ function AddDevicePanel({ onAdded }) {
           <input
             value={ip}
             onChange={(event) => setIp(event.target.value)}
-            placeholder="IP address"
+            placeholder="IP address (optional)"
             className="border border-white/10 bg-white/[0.04] px-3 py-2 text-sm"
-            required
           />
           <button className="bg-[#62d6a7] px-3 py-2 text-sm font-semibold text-[#07111f]">
             Register device

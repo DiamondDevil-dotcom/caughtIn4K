@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -46,9 +46,11 @@ class SenderHomePage extends StatefulWidget {
 }
 
 class _SenderHomePageState extends State<SenderHomePage> {
-  static const String _device = String.fromEnvironment(
-    'SENDER_DEVICE_NAME',
-    defaultValue: 'Galaxy S26 Ultra',
+  final TextEditingController _deviceNameController = TextEditingController(
+    text: const String.fromEnvironment(
+      'SENDER_DEVICE_NAME',
+      defaultValue: 'Galaxy S26 Ultra',
+    ),
   );
   static const List<List<double>> _normalSamples = <List<double>>[
     [2040708.8, 0, 0, 0, 0, 0, 1, 6885, 351.4, 0.0033692836761474, 5.5, 51.37602988175922, 1814773.306476049, 38.5],
@@ -70,13 +72,13 @@ class _SenderHomePageState extends State<SenderHomePage> {
   final TextEditingController _ipController = TextEditingController(
     text: const String.fromEnvironment(
       'FOLD_DEVICE_IP',
-      defaultValue: '',
+      defaultValue: '192.168.50.86',
     ),
   );
   final TextEditingController _macController = TextEditingController(
     text: const String.fromEnvironment(
       'FOLD_DEVICE_MAC',
-      defaultValue: '02:00:00:00:00:99',
+      defaultValue: '08:02:3c:79:25:40',
     ),
   );
 
@@ -95,6 +97,7 @@ class _SenderHomePageState extends State<SenderHomePage> {
 
   @override
   void dispose() {
+    _deviceNameController.dispose();
     _routerApiUrlController.dispose();
     _ipController.dispose();
     _macController.dispose();
@@ -142,8 +145,11 @@ class _SenderHomePageState extends State<SenderHomePage> {
       setState(() => _status = 'Enter the Fold MAC in aa:bb:cc:dd:ee:ff format.');
       return;
     }
+    final deviceName = _deviceNameController.text.trim().isEmpty
+        ? 'Galaxy S26 Ultra'
+        : _deviceNameController.text.trim();
     final payload = <String, dynamic>{
-      'device': _device,
+      'device': deviceName,
       'mac': mac,
       'features': (attack ? _attackSamples : _normalSamples)[
         DateTime.now().microsecondsSinceEpoch %
@@ -169,10 +175,12 @@ class _SenderHomePageState extends State<SenderHomePage> {
             headers: const <String, String>{
               'Content-Type': 'application/json',
               'Accept': 'application/json',
+              'ngrok-skip-browser-warning': 'true',
             },
             body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 15));
+
 
       String confidence = '—';
       String prediction = '';
@@ -271,10 +279,21 @@ class _SenderHomePageState extends State<SenderHomePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text('Device', style: theme.textTheme.labelLarge),
-                    const SizedBox(height: 6),
-                    const Text(_device),
-                    const SizedBox(height: 10),
+                    Text('Device Name', style: theme.textTheme.labelLarge),
+                    const SizedBox(height: 4),
+                    Text(
+                      'The name that appears on the website and app dashboard for this phone.',
+                      style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _deviceNameController,
+                      decoration: const InputDecoration(
+                        hintText: 'e.g. Galaxy S26 Ultra',
+                        prefixIcon: Icon(Icons.phone_android),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     Text('Device MAC address', style: theme.textTheme.labelLarge),
                     const SizedBox(height: 4),
                     Text(

@@ -76,7 +76,7 @@ class DevicesScreen extends StatelessWidget {
             child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Device name'), validator: (value) => value == null || value.trim().isEmpty ? 'Enter a name' : null),
             TextFormField(controller: mac, decoration: const InputDecoration(labelText: 'MAC address', hintText: 'aa:bb:cc:dd:ee:ff'), validator: (value) => value == null || !RegExp(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$').hasMatch(value.trim()) ? 'Enter a valid MAC address' : null),
-            TextFormField(controller: ip, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP address'), validator: (value) => value == null || value.trim().isEmpty ? 'Enter an IP address' : null),
+            TextFormField(controller: ip, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP address (optional)', hintText: 'Auto-resolved if omitted')),
           ])),
         ),
         actions: [

@@ -506,7 +506,11 @@ def register_device(payload: RegisterDeviceRequest) -> Dict[str, Any]:
 @app.delete("/devices/{mac}")
 def delete_device(mac: str) -> Dict[str, Any]:
     try:
-        return router_request("DELETE", f"/devices/{mac}")
+        res = router_request("DELETE", f"/devices/{mac}")
+        if isinstance(res, dict):
+            res["success"] = True
+            return res
+        return {"success": True, "mac": mac}
     except Exception:
         return {"success": True, "message": f"Device {mac} removed"}
 
