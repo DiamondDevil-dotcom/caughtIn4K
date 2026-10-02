@@ -1,0 +1,5 @@
+flwr==1.35.0
+numpy
+pandas
+scikit-learn
+torch

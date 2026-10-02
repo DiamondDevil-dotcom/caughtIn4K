@@ -1,0 +1,31 @@
+# Example hostapd config for turning the Raspberry Pi into the Wi-Fi AP.
+# Copy to /etc/hostapd/hostapd.conf and adjust interface/ssid/passphrase.
+# After editing, point /etc/default/hostapd DAEMON_CONF at this file.
+#
+# Manual one-time setup on the Pi (cannot be done remotely from this tool):
+#   sudo apt install hostapd dnsmasq
+#   sudo systemctl unmask hostapd
+#   sudo cp router_setup/hostapd.conf.example /etc/hostapd/hostapd.conf
+#   sudo cp router_setup/dnsmasq.conf.example /etc/dnsmasq.conf
+#   Edit /etc/dhcpcd.conf to give wlan0 a static IP (e.g. 192.168.50.1/24)
+#   sudo systemctl enable hostapd dnsmasq
+#   sudo systemctl start hostapd dnsmasq
+#   Enable IP forwarding + NAT out eth0 if the Pi should also route to internet:
+#     sudo sysctl -w net.ipv4.ip_forward=1
+#     sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+interface=wlan0
+driver=nl80211
+ssid=caughtIn4K-Secure
+hw_mode=g
+channel=6
+wmm_enabled=1
+auth_algs=1
+wpa=2
+wpa_passphrase=ChangeThisPassword123
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+
+# Deny-list used by router_ids_agent.py / network_control.py to block devices.
+deny_mac_file=/etc/hostapd/hostapd.deny
+macaddr_acl=0

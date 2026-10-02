@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hmac
 import json
 import os
 import re
-import socket
-import subprocess
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,9 +14,12 @@ import numpy as np
 import pandas as pd
 import torch
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from federated_coordinator import FederatedCoordinator
+from gateway_auth import check_owner, issue_session, verify_session
 
 LOCAL_DIR = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[2] if len(Path(__file__).resolve().parents) >= 3 else LOCAL_DIR
@@ -29,23 +30,15 @@ MODEL_DIRS = [
     NEW_MODEL_DIR,
     LEGACY_MODEL_DIR,
 ]
-# Federated learning architecture:
-# - each IoT device keeps a local model and trains on local traffic
-# - the device sends updated weights to the main server
-# - the server aggregates them into the global model stored centrally
-# - this app loads the server-side global model for inference
+# Render proxies to the Pi; only the laptop role launches Flower processes.
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ROUTER_API_URL = os.getenv("ROUTER_API_URL", "http://127.0.0.1:8001").rstrip("/")
+BACKEND_ROLE = os.getenv("GHOST_BACKEND_ROLE", "gateway")
+if BACKEND_ROLE not in {"gateway", "coordinator"}:
+    raise ValueError("GHOST_BACKEND_ROLE must be gateway or coordinator.")
 FEDERATED_PROJECT_DIR = ROOT / "Ghost-1D GRU Model with EANGO on Full Dataset"
 FEDERATED_LOG_PATH = ROOT / "Database" / "federated_training.log"
-_FEDERATED_LOCK = threading.Lock()
-_FL_STATE: Dict[str, Any] = {
-    "state": "idle",
-    "current_round": 10,
-    "total_rounds": 10,
-    "started_at": None,
-    "error": None,
-}
+COORDINATOR = FederatedCoordinator(FEDERATED_PROJECT_DIR, ROUTER_API_URL, FEDERATED_LOG_PATH)
 
 
 def latest_global_checkpoint() -> Path:
@@ -56,40 +49,42 @@ def latest_global_checkpoint() -> Path:
 
 
 def _training_state() -> Dict[str, Any]:
-    return {
-        "state": _FL_STATE["state"],
-        "current_round": _FL_STATE["current_round"],
-        "total_rounds": _FL_STATE["total_rounds"],
-        "laptop_client_running": _FL_STATE["state"] == "running",
-        "started_at": _FL_STATE["started_at"],
-        "error": _FL_STATE["error"],
-    }
-
-
-
-def _laptop_ip_for_router() -> str:
-    router_host = httpx.URL(ROUTER_API_URL).host
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route_socket:
-        route_socket.connect((router_host, 80))
-        return str(route_socket.getsockname()[0])
+    return COORDINATOR.status()
 
 
 def router_request(method: str, path: str, **kwargs) -> Any:
     headers = kwargs.pop("headers", {})
     headers.setdefault("ngrok-skip-browser-warning", "true")
     headers.setdefault("User-Agent", "caughtIn4K-cloud-agent/1.0")
+    router_token = os.getenv("GHOST_ROUTER_TOKEN", "")
+    if router_token:
+        headers["X-Gateway-Token"] = router_token
     try:
-        response = httpx.request(method, f"{ROUTER_API_URL}{path}", headers=headers, timeout=10, **kwargs)
+        timeout = kwargs.pop("timeout", 10)
+        response = httpx.request(method, f"{ROUTER_API_URL}{path}", headers=headers, timeout=timeout, **kwargs)
         response.raise_for_status()
-        return response.json()
-    except httpx.HTTPError as error:
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Pi API must return a JSON object.")
+        return payload
+    except httpx.HTTPStatusError as error:
+        try:
+            payload = error.response.json()
+            detail = payload.get("detail", "Pi request failed.") if isinstance(payload, dict) else f"Pi returned HTTP {error.response.status_code}."
+        except ValueError:
+            detail = f"Pi returned HTTP {error.response.status_code}."
+        raise HTTPException(status_code=error.response.status_code, detail=detail) from error
+    except (httpx.RequestError, ValueError) as error:
         print(f"[ROUTER REQUEST ERROR] {method} {ROUTER_API_URL}{path}: {error}")
         raise HTTPException(status_code=502, detail=f"Router API unavailable: {error}") from error
 
 
 
 def router_devices() -> List[Dict[str, Any]]:
-    return router_request("GET", "/devices").get("devices", [])
+    devices = router_request("GET", "/devices").get("devices")
+    if not isinstance(devices, list) or any(not isinstance(device, dict) for device in devices):
+        raise HTTPException(status_code=502, detail="Pi API returned an invalid device list.")
+    return devices
 
 
 def website_device(device: Dict[str, Any]) -> Dict[str, Any]:
@@ -230,6 +225,23 @@ def _read_real_feature_vector(device_id: str) -> np.ndarray:
 
 app = FastAPI(title="Signal Watch API", version="1.0.0")
 
+@app.middleware("http")
+async def require_gateway_session(request: Request, call_next):
+    public_routes = {
+        "/health", "/login", "/signup", "/auth/login", "/auth/signup",
+        "/auth/request-password-reset", "/auth/reset-password",
+    }
+    if BACKEND_ROLE == "gateway" and request.method != "OPTIONS" and request.url.path not in public_routes:
+        try:
+            verify_session(request.headers.get("Authorization", ""))
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+    if BACKEND_ROLE == "coordinator":
+        token = os.getenv("GHOST_ROUTER_TOKEN", "")
+        if token and not hmac.compare_digest(request.headers.get("X-Gateway-Token", "").encode(), token.encode()):
+            return JSONResponse(status_code=401, content={"detail": "Coordinator token required."})
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -239,7 +251,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "*",
     ],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -300,20 +312,7 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-LOGIN_EVENTS: List[Dict[str, Any]] = [
-    {
-        "username": "admin",
-        "success": True,
-        "ip_address": "10.0.0.13",
-        "timestamp": (utc_now() - timedelta(minutes=22)).strftime("%Y-%m-%d %H:%M:%S"),
-    },
-    {
-        "username": "operator",
-        "success": True,
-        "ip_address": "10.0.0.27",
-        "timestamp": (utc_now() - timedelta(minutes=14)).strftime("%Y-%m-%d %H:%M:%S"),
-    },
-]
+LOGIN_EVENTS: List[Dict[str, Any]] = []
 
 def _dataset_alerts() -> List[Dict[str, Any]]:
     alerts: List[Dict[str, Any]] = []
@@ -423,43 +422,25 @@ def health() -> Dict[str, Any]:
 
 @app.get("/debug/router")
 def debug_router() -> Dict[str, Any]:
-    headers = {
-        "ngrok-skip-browser-warning": "true",
-        "User-Agent": "caughtIn4K-cloud-agent/1.0",
+    result = router_request("GET", "/devices")
+    return {
+        "configured_router_url": ROUTER_API_URL,
+        "status_code": 200,
+        "device_count": len(result.get("devices", [])),
     }
-    target = f"{ROUTER_API_URL}/devices"
-    try:
-        res = httpx.get(target, headers=headers, timeout=10)
-        return {
-            "configured_router_url": ROUTER_API_URL,
-            "target": target,
-            "status_code": res.status_code,
-            "content_preview": res.text[:500],
-        }
-    except Exception as err:
-        return {
-            "configured_router_url": ROUTER_API_URL,
-            "target": target,
-            "error": str(err),
-        }
 
 
 @app.get("/devices")
 def list_devices() -> Dict[str, List[Dict[str, Any]]]:
-    try:
-        raw = router_devices()
-        return {"devices": [website_device(device) for device in raw if not is_calibration_device(device)]}
-    except Exception as err:
-        print(f"[LIST DEVICES ERROR] Failed to fetch router devices: {err}")
-        return {"devices": []}
+    raw = router_devices()
+    return {"devices": [website_device(device) for device in raw if not is_calibration_device(device)]}
 
 
 
 @app.get("/alerts")
 def list_alerts() -> Dict[str, List[Dict[str, Any]]]:
-    try:
-        events = router_request("GET", "/events?limit=100").get("events", [])
-        return {
+    events = router_request("GET", "/events?limit=100").get("events", [])
+    return {
             "detections": [
                 {
                     "device_id": event.get("mac"),
@@ -473,62 +454,60 @@ def list_alerts() -> Dict[str, List[Dict[str, Any]]]:
                 for event in events
                 if not is_calibration_device({"mac": event.get("mac")})
             ]
-        }
-    except Exception:
-        return {"detections": []}
+    }
+
+
+@app.get("/events")
+def list_events(limit: int = 50):
+    return router_request("GET", "/events", params={"limit": limit})
+
+
+@app.post("/telemetry")
+def telemetry(payload: Dict[str, Any]):
+    return router_request("POST", "/telemetry", json=payload)
+
+
+@app.post("/auth/{action}")
+def auth_action(action: str, payload: Dict[str, Any]):
+    if action not in {"signup", "login", "change-password", "request-password-reset", "reset-password"}:
+        raise HTTPException(status_code=404, detail="Unknown account action.")
+    if BACKEND_ROLE == "gateway":
+        check_owner(str(payload.get("email", "")))
+    result = router_request("POST", f"/auth/{action}", json=payload)
+    if action in {"signup", "login"} and result.get("success") is True:
+        result["access_token"] = issue_session(result["email"])
+    return result
 
 
 @app.post("/devices/register")
 def register_device(payload: RegisterDeviceRequest) -> Dict[str, Any]:
-    try:
-        result = router_request(
+    result = router_request(
             "POST",
             "/devices/register",
             json={"name": payload.name, "mac": payload.mac, "ip_address": payload.ip_address},
         )
-        return {"device": website_device(result)}
-    except Exception:
-        new_device = {
-            "device_id": payload.mac,
-            "name": payload.name,
-            "class_index": len(DEVICES),
-            "mac": payload.mac,
-            "ip_address": payload.ip_address,
-            "status": "SAFE",
-            "prediction": "Benign",
-            "attack_probability": 0,
-            "blocked": False,
-            "last_seen": time.time(),
-        }
-        return {"device": new_device}
+    return {**result, "device": website_device(result)}
 
 
 @app.delete("/devices/{mac}")
 def delete_device(mac: str) -> Dict[str, Any]:
-    try:
-        res = router_request("DELETE", f"/devices/{mac}")
-        if isinstance(res, dict):
-            res["success"] = True
-            return res
-        return {"success": True, "mac": mac}
-    except Exception:
-        return {"success": True, "message": f"Device {mac} removed"}
+    return router_request("DELETE", f"/devices/{mac}")
 
 
 @app.post("/devices/{mac}/block")
 def block_device(mac: str) -> Dict[str, Any]:
-    try:
-        return router_request("POST", f"/devices/{mac}/block")
-    except Exception:
-        return {"success": True, "message": f"Device {mac} blocked"}
+    result = router_request("POST", f"/devices/{mac}/block")
+    if result.get("success") is not True:
+        raise HTTPException(status_code=502, detail=result.get("detail", "Pi could not block this device."))
+    return result
 
 
 @app.post("/devices/{mac}/unblock")
 def unblock_device(mac: str) -> Dict[str, Any]:
-    try:
-        return router_request("POST", f"/devices/{mac}/unblock")
-    except Exception:
-        return {"success": True, "message": f"Device {mac} unblocked"}
+    result = router_request("POST", f"/devices/{mac}/unblock")
+    if result.get("success") is not True:
+        raise HTTPException(status_code=502, detail=result.get("detail", "Pi could not unblock this device."))
+    return result
 
 
 @app.get("/login-history")
@@ -537,39 +516,42 @@ def list_login_history() -> Dict[str, List[Dict[str, Any]]]:
 
 
 @app.post("/login")
-def login(payload: LoginRequest) -> Dict[str, Any]:
+def login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
     username = payload.username.strip()
-    password = payload.password.strip()
+    password = payload.password
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required.")
+    if BACKEND_ROLE == "gateway":
+        check_owner(username)
 
     name = username.split("@")[0].capitalize()
     email = username
-    try:
-        result = router_request(
+    result = router_request(
             "POST",
             "/auth/login",
             json={"email": username, "password": password},
         )
-        if result.get("success") is True:
-            name = result.get("name", name)
-            email = result.get("email", email)
-    except Exception:
-        pass
+    if result.get("success") is not True:
+        raise HTTPException(status_code=401, detail=result.get("error", "Invalid credentials."))
+    name = result.get("name", name)
+    email = result.get("email", email)
 
     login_event = {
         "username": username,
         "success": True,
-        "ip_address": "192.168.1.25",
+        "ip_address": request.client.host if request.client else "unknown",
         "timestamp": utc_now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     LOGIN_EVENTS.insert(0, login_event)
 
-    return {"username": name, "email": email, "message": "Authentication successful"}
+    return {"username": name, "email": email, "message": "Authentication successful",
+            "access_token": issue_session(email)}
 
 
 @app.post("/signup")
 def signup(payload: SignupRequest) -> Dict[str, Any]:
+    if BACKEND_ROLE == "gateway":
+        check_owner(payload.email)
     result = router_request(
         "POST",
         "/auth/signup",
@@ -577,7 +559,9 @@ def signup(payload: SignupRequest) -> Dict[str, Any]:
     )
     if result.get("success") is not True:
         raise HTTPException(status_code=400, detail=result.get("error", "Account creation failed"))
-    return {"username": result.get("name", payload.name), "email": result.get("email", payload.email)}
+    email = result.get("email", payload.email)
+    return {"username": result.get("name", payload.name), "email": email,
+            "access_token": issue_session(email)}
 
 
 @app.get("/detect/{device_id}")
@@ -608,6 +592,8 @@ def detect_device(device_id: str) -> Dict[str, Any]:
 
 @app.get("/federated-status")
 def federated_status() -> Dict[str, Any]:
+    if BACKEND_ROLE == "gateway":
+        return router_request("GET", "/federated-status", timeout=20)
     checkpoint_path = latest_global_checkpoint()
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     is_bundle = isinstance(checkpoint, dict) and "model_state_dict" in checkpoint
@@ -640,118 +626,22 @@ def federated_status() -> Dict[str, Any]:
 
 @app.get("/federated-training/status")
 def federated_training_status() -> Dict[str, Any]:
-    return _training_state()
+    if BACKEND_ROLE == "gateway":
+        raise HTTPException(status_code=409, detail="This is the public gateway, not the laptop coordinator.")
+    return COORDINATOR.status()
 
 
-def _run_federated_training_loop():
-    global MODEL, _FL_STATE
-    try:
-        csv_file = LOCAL_DIR / "sample_data.csv"
-        if not csv_file.exists():
-            raise FileNotFoundError("sample_data.csv not found for federated training")
-
-        df = pd.read_csv(csv_file)
-        feature_cols = [c for c in FEATURE_NAMES if c in df.columns]
-        X = df[feature_cols].values
-
-        mean = SCALER_MEAN[:len(feature_cols)]
-        scale = np.where(SCALER_SCALE[:len(feature_cols)] == 0, 1.0, SCALER_SCALE[:len(feature_cols)])
-        X_norm = (X - mean) / scale
-        X_tensor = torch.tensor(X_norm, dtype=torch.float32).to(DEVICE)
-
-        y_raw = df["label"].astype(str).str.contains("benign", case=False, na=False).values
-        y_tensor = torch.tensor(np.where(y_raw, 1, 0), dtype=torch.long).to(DEVICE)
-
-        # Partition into 2 federated participants: Laptop benchmark & Edge router telemetry
-        mid = len(X_tensor) // 2
-        X_c1, y_c1 = X_tensor[:mid], y_tensor[:mid]
-        X_c2, y_c2 = X_tensor[mid:], y_tensor[mid:]
-
-        criterion = torch.nn.CrossEntropyLoss()
-
-        for round_idx in range(1, 11):
-            _FL_STATE["current_round"] = round_idx
-            _FL_STATE["state"] = "running"
-
-            # Participant 1 (Laptop client) local training
-            m1 = Ghost1D_GRU(input_dim=len(FEATURE_NAMES), num_classes=len(CLASS_NAMES)).to(DEVICE)
-            m1.load_state_dict(MODEL.state_dict())
-            opt1 = torch.optim.Adam(m1.parameters(), lr=0.001)
-            m1.train()
-            out1 = m1(X_c1)
-            loss1 = criterion(out1, y_c1)
-            opt1.zero_grad()
-            loss1.backward()
-            opt1.step()
-
-            # Participant 2 (Raspberry Pi Edge client) local training
-            m2 = Ghost1D_GRU(input_dim=len(FEATURE_NAMES), num_classes=len(CLASS_NAMES)).to(DEVICE)
-            m2.load_state_dict(MODEL.state_dict())
-            opt2 = torch.optim.Adam(m2.parameters(), lr=0.001)
-            m2.train()
-            out2 = m2(X_c2)
-            loss2 = criterion(out2, y_c2)
-            opt2.zero_grad()
-            loss2.backward()
-            opt2.step()
-
-            # FedAvg Parameter Aggregation: W_global = 0.5 * W1 + 0.5 * W2
-            w1 = m1.state_dict()
-            w2 = m2.state_dict()
-            w_global = {}
-            for k in w1.keys():
-                w_global[k] = 0.5 * w1[k] + 0.5 * w2[k]
-
-            MODEL.load_state_dict(w_global)
-            time.sleep(1.2)
-
-        # Save aggregated global checkpoint
-        saved_dir = LOCAL_DIR / "saved_models"
-        saved_dir.mkdir(parents=True, exist_ok=True)
-        ckpt_path = saved_dir / "global_model_round_10.pth"
-        bundle = {
-            "model_state_dict": MODEL.state_dict(),
-            "feature_names": FEATURE_NAMES,
-            "class_names": CLASS_NAMES,
-            "scaler_mean": SCALER_MEAN,
-            "scaler_scale": SCALER_SCALE,
-            "train_fill_values": {},
-            "benign_threshold": BENIGN_THRESHOLD,
-            "federated_round": 10,
-            "federated_clients": 2,
-            "aggregation": "FedAvg",
-            "updated_at": time.time(),
-        }
-        torch.save(bundle, ckpt_path)
-
-        _FL_STATE["state"] = "completed"
-        _FL_STATE["current_round"] = 10
-        _FL_STATE["error"] = None
-        print("[FEDERATED LEARNING] 10 rounds of FedAvg completed successfully. New global checkpoint saved.")
-    except Exception as e:
-        print(f"[FEDERATED LEARNING ERROR] {e}")
-        _FL_STATE["state"] = "failed"
-        _FL_STATE["error"] = str(e)
-
-
+@app.post("/federated/start")
 @app.post("/federated/train")
 def start_federated_training() -> Dict[str, Any]:
-    with _FEDERATED_LOCK:
-        if _FL_STATE["state"] == "running":
-            raise HTTPException(status_code=409, detail="Federated training is already running.")
-
-        _FL_STATE["state"] = "running"
-        _FL_STATE["current_round"] = 0
-        _FL_STATE["error"] = None
-        _FL_STATE["started_at"] = time.time()
-
-        threading.Thread(target=_run_federated_training_loop, daemon=True).start()
-
-        return {
-            "success": True,
-            "message": "Federated training started with the laptop and Raspberry Pi clients.",
-            "training": _training_state(),
-        }
+    if BACKEND_ROLE == "gateway":
+        return router_request("POST", "/federated/start", timeout=30)
+    try:
+        return COORDINATOR.start()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except OSError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 

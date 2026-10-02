@@ -1,0 +1,15 @@
+__pycache__/
+.venv/
+venv*/
+CICIOT23/
+data/
+saved_models/
+*.csv
+*.pth
+*.pt
+*.db
+*.db-*
+*.log
+*.png
+.env
+.env.*

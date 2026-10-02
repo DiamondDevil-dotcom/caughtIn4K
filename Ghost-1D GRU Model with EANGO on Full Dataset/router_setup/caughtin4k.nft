@@ -1,0 +1,17 @@
+table inet caughtin4k {
+    set blocked_macs {
+        type ether_addr
+    }
+
+    chain input_filter {
+        type filter hook input priority filter; policy accept;
+        iifname "wlan0" ether saddr @blocked_macs udp dport 67 accept
+        iifname "wlan0" ether saddr @blocked_macs drop
+    }
+
+    chain forward_filter {
+        type filter hook forward priority filter; policy accept;
+        iifname "wlan0" ether saddr @blocked_macs drop
+        oifname "wlan0" ether daddr @blocked_macs drop
+    }
+}
