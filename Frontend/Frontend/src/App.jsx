@@ -31,8 +31,24 @@ import {
   YAxis,
 } from "recharts";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API_URL = (import.meta.env.VITE_API_URL || "https://caughtin4k.onrender.com").replace(/\/+$/, "");
 const DASHBOARD_REFRESH_MS = 10_000;
+
+async function apiFetch(url, options = {}) {
+  const token = sessionStorage.getItem("gateway-token");
+  const response = await fetch(url, {
+    ...options,
+    headers: { ...options.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (response.status === 401 && token) {
+    sessionStorage.removeItem("gateway-token");
+    sessionStorage.removeItem("signal-watch-auth");
+    window.location.reload();
+    throw new Error("Session expired. Sign in again.");
+  }
+  return response;
+}
 
 const classColors = {
   Benign: "#62d6a7",
@@ -46,7 +62,7 @@ function App() {
     () => localStorage.getItem("caughtin4k-theme") || "dark",
   );
   const [authenticated, setAuthenticated] = useState(
-    () => sessionStorage.getItem("signal-watch-auth") === "true",
+    () => sessionStorage.getItem("signal-watch-auth") === "true" && Boolean(sessionStorage.getItem("gateway-token")),
   );
   const [username, setUsername] = useState(
     () => sessionStorage.getItem("signal-watch-user") || "",
@@ -103,26 +119,26 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
   const [apiReady, setApiReady] = useState(null);
 
   const loadDevices = async () => {
-    const response = await fetch(`${API_URL}/devices`);
+    const response = await apiFetch(`${API_URL}/devices`);
     if (!response.ok) throw new Error("Could not load devices");
     setDevices((await response.json()).devices);
   };
 
   const loadAlerts = async () => {
-    const response = await fetch(`${API_URL}/alerts`);
+    const response = await apiFetch(`${API_URL}/alerts`);
     if (!response.ok) throw new Error("Could not load alert history");
     setAlerts((await response.json()).detections);
   };
 
   const loadLoginEvents = async () => {
-    const response = await fetch(`${API_URL}/login-history`);
+    const response = await apiFetch(`${API_URL}/login-history`);
     if (!response.ok) throw new Error("Could not load login history");
     setLoginEvents((await response.json()).logins);
   };
 
   const loadFederatedStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/federated-status`);
+      const response = await apiFetch(`${API_URL}/federated-status`);
       if (!response.ok) throw new Error("Could not load federated model status");
       setFederatedStatus(await response.json());
       setFederatedError("");
@@ -135,7 +151,7 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
     setTrainingStarting(true);
     setFederatedError("");
     try {
-      const response = await fetch(`${API_URL}/federated/train`, { method: "POST" });
+      const response = await apiFetch(`${API_URL}/federated/train`, { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Could not start federated training");
       await loadFederatedStatus();
@@ -167,7 +183,7 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`${API_URL}/detect/${device.device_id}`);
+      const response = await apiFetch(`${API_URL}/detect/${device.device_id}`);
       if (!response.ok) throw new Error("Detection request failed");
       setResult(await response.json());
       await loadAlerts();
@@ -421,7 +437,7 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_URL}/${creating ? "signup" : "login"}`,
         {
           method: "POST",
@@ -435,6 +451,8 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
       );
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Login failed");
+      if (!data.access_token) throw new Error("Update the backend to support gateway sessions.");
+      sessionStorage.setItem("gateway-token", data.access_token);
       onLogin(data.username);
     } catch (requestError) {
       setError(requestError.message);
@@ -615,22 +633,27 @@ function ThemeToggle({ theme, onToggle }) {
 function DevicesView({ devices, alerts, federatedStatus, onAdded }) {
   const [removeError, setRemoveError] = useState("");
   const setBlocked = async (device) => {
+    setRemoveError("");
     const action =
       device.blocked || device.status === "BLOCKED" ? "unblock" : "block";
-    const response = await fetch(
-      `${API_URL}/devices/${encodeURIComponent(device.mac)}/${action}`,
-      { method: "POST" },
-    );
-    const data = await response.json();
-    if (!response.ok || data.success !== true)
-      throw new Error(data.detail || `Could not ${action} device`);
-    await onAdded();
+    try {
+      const response = await apiFetch(
+        `${API_URL}/devices/${encodeURIComponent(device.mac)}/${action}`,
+        { method: "POST" },
+      );
+      const data = await response.json();
+      if (!response.ok || data.success !== true)
+        throw new Error(data.detail || `Could not ${action} device`);
+      await onAdded();
+    } catch (requestError) {
+      setRemoveError(requestError.message);
+    }
   };
   const removeDevice = async (device) => {
     if (!window.confirm(`Remove ${device.name} from caughtIn4K?`)) return;
     setRemoveError("");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_URL}/devices/${encodeURIComponent(device.mac)}`,
         { method: "DELETE" },
       );
@@ -715,7 +738,7 @@ function AddDevicePanel({ onAdded }) {
     event.preventDefault();
     setError("");
     try {
-      const response = await fetch(`${API_URL}/devices/register`, {
+      const response = await apiFetch(`${API_URL}/devices/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, mac: mac.toLowerCase(), ip_address: ip }),
