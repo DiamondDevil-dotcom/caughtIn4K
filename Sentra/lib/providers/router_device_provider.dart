@@ -19,6 +19,20 @@ class RouterDeviceProvider extends ChangeNotifier {
   Timer? _pollingTimer;
   Timer? _federatedPollingTimer;
   final Map<String, String> _lastStatusByMac = {};
+  bool _fetchingDevices = false;
+  bool _fetchingFederatedStatus = false;
+  bool _disposed = false;
+
+  void clearCachedData() {
+    devices = [];
+    federatedStatus = null;
+    federatedStatusError = null;
+    federatedTrainingMessage = null;
+    notifications.clear();
+    _lastStatusByMac.clear();
+    lastError = null;
+    notifyListeners();
+  }
 
   void startPolling() {
     _fetch();
@@ -34,8 +48,17 @@ class RouterDeviceProvider extends ChangeNotifier {
   }
 
   Future<void> _fetchFederatedStatus() async {
+    if (_disposed || _fetchingFederatedStatus || !RouterApiService.hasSession) return;
+    _fetchingFederatedStatus = true;
+    final requestedUrl = RouterApiService.baseUrl;
+    final requestedSession = RouterApiService.sessionGeneration;
     try {
-      federatedStatus = await RouterApiService.federatedStatus();
+      final fetched = await RouterApiService.federatedStatus();
+      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+          requestedSession != RouterApiService.sessionGeneration) {
+        return;
+      }
+      federatedStatus = fetched;
       federatedStatusError = null;
       final training = federatedStatus?['training'];
       if (training is Map<String, dynamic> && training['state'] == 'running') {
@@ -46,9 +69,15 @@ class RouterDeviceProvider extends ChangeNotifier {
         federatedTrainingMessage = 'Federated training completed.';
       }
     } catch (error) {
+      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+          requestedSession != RouterApiService.sessionGeneration) {
+        return;
+      }
       federatedStatusError = error.toString();
+    } finally {
+      _fetchingFederatedStatus = false;
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   Future<void> startFederatedTraining() async {
@@ -71,15 +100,29 @@ class RouterDeviceProvider extends ChangeNotifier {
   }
 
   Future<void> _fetch() async {
+    if (_disposed || _fetchingDevices || !RouterApiService.hasSession) return;
+    _fetchingDevices = true;
+    final requestedUrl = RouterApiService.baseUrl;
+    final requestedSession = RouterApiService.sessionGeneration;
     try {
       final fetched = await RouterApiService.devices();
+      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+          requestedSession != RouterApiService.sessionGeneration) {
+        return;
+      }
       _notifyOnChanges(fetched);
       devices = fetched;
       lastError = null;
     } catch (error) {
+      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+          requestedSession != RouterApiService.sessionGeneration) {
+        return;
+      }
       lastError = error.toString();
+    } finally {
+      _fetchingDevices = false;
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   void _notifyOnChanges(List<Map<String, dynamic>> fetched) {
@@ -142,6 +185,7 @@ class RouterDeviceProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _pollingTimer?.cancel();
     _federatedPollingTimer?.cancel();
     super.dispose();

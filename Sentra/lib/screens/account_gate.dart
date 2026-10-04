@@ -5,6 +5,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/activity_provider.dart';
+import '../providers/alert_provider.dart';
+import '../providers/router_device_provider.dart';
 import 'auth_screen.dart';
 import 'navigation_screen.dart';
 
@@ -111,6 +114,9 @@ class _BiometricGateState extends State<BiometricGate>
   }
 
   Future<void> _usePassword() async {
+    context.read<RouterDeviceProvider>().clearCachedData();
+    context.read<ActivityProvider>().clearCachedData();
+    context.read<AlertProvider>().clearCachedData();
     await context
         .read<AuthProvider>()
         .signOut(preservePasswordFallback: true);

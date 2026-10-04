@@ -16,11 +16,13 @@ import math
 import os
 import secrets
 import smtplib
+import ssl
 import subprocess
 import statistics
 import sys
 import threading
 import time
+from contextvars import ContextVar
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
@@ -100,7 +102,10 @@ def laptop_control_url(path):
         try:
             with urllib.request.urlopen(
                 urllib.request.Request(f"{base_url}/federated-training/status",
-                                       headers={"X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", "")}),
+                                       headers={
+                                           "X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", ""),
+                                           **({"X-Gateway-User": _gateway_user_email.get()} if _gateway_user_email.get() else {}),
+                                       }),
                 timeout=0.8
             ) as response:
                 if response.status == 200:
@@ -112,6 +117,20 @@ def laptop_control_url(path):
         status_code=503,
         detail="Laptop coordinator is not reachable. Set GHOST_LAPTOP_API_URL to the laptop's LAN URL; no cloud fallback is used.",
     )
+
+_gateway_user_email: ContextVar[str] = ContextVar("gateway_user_email", default="")
+
+
+def laptop_request(path):
+    request = urllib.request.Request(
+        laptop_control_url(path),
+        headers={
+            "X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", ""),
+            **({"X-Gateway-User": _gateway_user_email.get()} if _gateway_user_email.get() else {}),
+        },
+    )
+    return request
+
 
 DEFAULT_MODEL_PATH = "ghost1d_gru_fedavg_improved.pth"
 DEFAULT_MODEL_PATH = Path(
@@ -476,13 +495,52 @@ def capture_loop(iface, model, scaler_mean, scaler_scale, attack_threshold):
 
 app = FastAPI()
 
+PUBLIC_WITHOUT_HOUSEHOLD = {
+    "/health",
+    "/auth/signup",
+    "/auth/login",
+    "/auth/change-password",
+    "/auth/request-password-reset",
+    "/auth/reset-password",
+    "/household/role",
+    "/gateway/claim",
+}
+COORDINATOR_ROUTES = {"/federated/start-client", "/federated/stop-client"}
+
 
 @app.middleware("http")
 async def require_private_tunnel_token(request: Request, call_next):
     token = os.getenv("GHOST_ROUTER_TOKEN", "")
+    if request.url.path != "/health" and not token:
+        return JSONResponse(status_code=503, content={"detail": "Configure the private gateway token on the Pi before serving API requests."})
     if token and not secrets.compare_digest(request.headers.get("X-Gateway-Token", "").encode(), token.encode()):
         return JSONResponse(status_code=401, content={"detail": "Use the authenticated Render gateway."})
-    return await call_next(request)
+    if (
+        request.method != "OPTIONS"
+        and request.url.path not in PUBLIC_WITHOUT_HOUSEHOLD
+        and request.url.path not in COORDINATOR_ROUTES
+    ):
+        email = request.headers.get("X-Gateway-User", "").strip().lower()
+        role = storage.household_role(email) if email else None
+        if role is None:
+            return JSONResponse(status_code=403, content={"detail": "This account is not a member of the claimed household."})
+        request.state.household_email = email
+        request.state.household_role = role
+        context_token = _gateway_user_email.set(email)
+    else:
+        context_token = None
+    try:
+        return await call_next(request)
+    finally:
+        if context_token is not None:
+            _gateway_user_email.reset(context_token)
+
+
+def require_household_admin(request: Request, owner_only: bool = False):
+    role = getattr(request.state, "household_role", None)
+    allowed = {"owner"} if owner_only else {"owner", "admin"}
+    if role not in allowed:
+        raise HTTPException(status_code=403, detail="Household owner or admin permission is required.")
 
 
 class TelemetryPayload(BaseModel):
@@ -497,17 +555,28 @@ class SignupPayload(BaseModel):
     name: str
     email: str
     password: str
+    access_code: str = ""
 
 
 class LoginPayload(BaseModel):
     email: str
     password: str
+    access_code: str = ""
 
 
 class ChangePasswordPayload(BaseModel):
-    email: str
+    email: str = ""
     current_password: str
     new_password: str
+
+
+class GatewayClaimPayload(BaseModel):
+    pairing_code: str
+
+
+class HouseholdInvitePayload(BaseModel):
+    email: str
+    role: str = "member"
 
 
 class PasswordResetRequest(BaseModel):
@@ -524,6 +593,11 @@ class RegisterDevicePayload(BaseModel):
     name: str
     mac: str = Field(pattern=r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
     ip_address: str
+
+
+def _ensure_household_device(mac):
+    if not storage.is_household_device(mac):
+        raise HTTPException(status_code=404, detail="Device is not registered to this household.")
 
 
 class FederatedStartClientPayload(BaseModel):
@@ -552,12 +626,20 @@ def list_devices():
             state.ip_address = resolve_ip_from_neighbor_table(state.mac)
             if state.ip_address:
                 storage.upsert_device(state)
-    return {
-        "devices": [
-            device for device in registry.all()
-            if not is_excluded_device(device["mac"]) and not storage.is_device_hidden(device["mac"])
-        ]
-    }
+    household_macs = {device["mac"].lower() for device in storage.all_devices()}
+    return {"devices": [
+        device for device in registry.all()
+        if device["mac"].lower() in household_macs
+        and not is_excluded_device(device["mac"])
+    ]}
+
+
+@app.get("/household/role")
+def get_household_role(request: Request):
+    email = request.headers.get("X-Gateway-User", "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Sign in to check household access.")
+    return {"role": storage.household_role(email)}
 
 
 @app.get("/federated-status")
@@ -573,7 +655,10 @@ def federated_status():
     try:
         with urllib.request.urlopen(
             urllib.request.Request(laptop_control_url("/federated-training/status"),
-                                   headers={"X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", "")}),
+                                   headers={
+                                       "X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", ""),
+                                       **({"X-Gateway-User": _gateway_user_email.get()} if _gateway_user_email.get() else {}),
+                                   }),
             timeout=3,
         ) as response:
             training = json.loads(response.read().decode("utf-8"))
@@ -605,14 +690,16 @@ def federated_status():
 
 
 @app.post("/federated/start")
-def start_federated_training_from_pi():
+def start_federated_training_from_pi(request: Request):
+    require_household_admin(request)
     try:
         with urllib.request.urlopen(
             urllib.request.Request(
                 laptop_control_url("/federated/train"),
                 data=b"{}",
                 headers={"Content-Type": "application/json",
-                         "X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", "")},
+                         "X-Gateway-Token": os.getenv("GHOST_ROUTER_TOKEN", ""),
+                         **({"X-Gateway-User": _gateway_user_email.get()} if _gateway_user_email.get() else {})},
                 method="POST",
             ),
             timeout=15,
@@ -679,7 +766,9 @@ def _stop_pi_federated_client():
 
 
 @app.post("/devices/register")
-def register_device(payload: RegisterDevicePayload):
+def register_device(payload: RegisterDevicePayload, request: Request):
+    require_household_admin(request)
+    require_household_admin(request)
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Device name is required.")
@@ -701,8 +790,10 @@ def register_device(payload: RegisterDevicePayload):
 
 
 @app.delete("/devices/{mac}")
-def delete_device(mac: str):
+def delete_device(mac: str, request: Request):
     normalized = mac.strip().lower()
+    require_household_admin(request)
+    _ensure_household_device(normalized)
     registry.remove(normalized)
     storage.delete_device(normalized)
     return {"success": True, "mac": normalized}
@@ -716,10 +807,17 @@ def list_events(limit: int = 50):
 
 @app.post("/auth/signup")
 def signup(payload: SignupPayload):
-    success, error = storage.create_account(payload.name, payload.email, payload.password)
+    success, error = storage.create_account(
+        payload.name, payload.email, payload.password, payload.access_code
+    )
     if not success:
         return {"success": False, "error": error}
-    return {"success": True, "name": payload.name.strip(), "email": payload.email.strip().lower()}
+    return {
+        "success": True,
+        "name": payload.name.strip(),
+        "email": payload.email.strip().lower(),
+        "household_role": storage.household_role(payload.email),
+    }
 
 
 @app.post("/auth/login")
@@ -727,12 +825,40 @@ def login(payload: LoginPayload):
     success, error, account = storage.verify_account(payload.email, payload.password)
     if not success:
         return {"success": False, "error": error}
+    if payload.access_code and account["household_role"] is None:
+        accepted, invite_error, role = storage.accept_invite(
+            payload.email, payload.access_code
+        )
+        if not accepted:
+            return {"success": False, "error": invite_error}
+        account["household_role"] = role
     return {"success": True, **account}
 
 
-def send_reset_email(email, token):
+@app.post("/gateway/claim")
+def claim_gateway(payload: GatewayClaimPayload, request: Request):
+    email = request.headers.get("X-Gateway-User", "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Sign in before claiming this gateway.")
+    success, error, role = storage.claim_gateway(email, payload.pairing_code)
+    if not success:
+        raise HTTPException(status_code=400, detail=error)
+    return {"success": True, "household_role": role}
+
+
+@app.post("/household/invites")
+def invite_household_member(payload: HouseholdInvitePayload, request: Request):
+    inviter = request.state.household_email
+    success, error, invite = storage.create_invite(inviter, payload.email, payload.role)
+    if not success:
+        raise HTTPException(status_code=400, detail=error)
+    return {"success": True, **invite}
+
+
+def send_reset_email(email, token=None):
     host = os.getenv("GHOST_SMTP_HOST")
-    port = int(os.getenv("GHOST_SMTP_PORT", "587"))
+    implicit_tls = os.getenv("GHOST_SMTP_SSL", "").strip().lower() in {"1", "true", "yes"}
+    port = int(os.getenv("GHOST_SMTP_PORT", "465" if implicit_tls else "587"))
     username = os.getenv("GHOST_SMTP_USERNAME")
     password = os.getenv("GHOST_SMTP_PASSWORD")
     sender = os.getenv("GHOST_SMTP_FROM", username or "")
@@ -742,9 +868,19 @@ def send_reset_email(email, token):
     message["Subject"] = "caughtIn4K password reset"
     message["From"] = sender
     message["To"] = email
-    message.set_content(f"Your caughtIn4K password reset code is {token}. It expires in 15 minutes.")
-    with smtplib.SMTP(host, port, timeout=10) as smtp:
-        smtp.starttls()
+    if token is None:
+        message.set_content("If an account exists for this address, a reset code will be sent.")
+    else:
+        message.set_content(f"Your caughtIn4K password reset code is {token}. It expires in 15 minutes.")
+    if implicit_tls:
+        smtp_factory = lambda: smtplib.SMTP_SSL(
+            host, port, timeout=10, context=ssl.create_default_context()
+        )
+    else:
+        smtp_factory = lambda: smtplib.SMTP(host, port, timeout=10)
+    with smtp_factory() as smtp:
+        if not implicit_tls:
+            smtp.starttls(context=ssl.create_default_context())
         if username and password:
             smtp.login(username, password)
         smtp.send_message(message)
@@ -752,9 +888,12 @@ def send_reset_email(email, token):
 
 
 @app.post("/auth/change-password")
-def change_password(payload: ChangePasswordPayload):
+def change_password(payload: ChangePasswordPayload, request: Request):
+    email = request.headers.get("X-Gateway-User", "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Sign in again to change your password.")
     success, error = storage.change_password(
-        payload.email, payload.current_password, payload.new_password
+        email, payload.current_password, payload.new_password
     )
     return {"success": success, **({} if success else {"error": error})}
 
@@ -764,13 +903,19 @@ def request_password_reset(payload: PasswordResetRequest):
     token = f"{secrets.randbelow(1_000_000):06d}"
     expires_at = time.time() + 900
     created = storage.create_password_reset(payload.email, token, expires_at)
-    if created:
-        try:
-            if not send_reset_email(payload.email.strip().lower(), token):
-                return {"success": False, "error": "Email delivery is not configured."}
-        except (OSError, smtplib.SMTPException) as error:
-            print(f"[auth] reset email failed: {error}")
-            return {"success": False, "error": "Email delivery is not configured."}
+    try:
+        delivered = send_reset_email(
+            payload.email.strip().lower(), token if created else None
+        )
+        if not delivered:
+            if created:
+                storage.delete_password_reset(payload.email)
+            raise HTTPException(status_code=503, detail="Password reset email delivery is not configured.")
+    except (OSError, ValueError, smtplib.SMTPException) as error:
+        if created:
+            storage.delete_password_reset(payload.email)
+        print(f"[auth] password reset email delivery failed: {type(error).__name__}")
+        raise HTTPException(status_code=503, detail="Password reset email could not be delivered.") from error
     return {"success": True, "message": "If the account exists, a reset code was sent."}
 
 
@@ -783,9 +928,12 @@ def reset_password(payload: PasswordResetPayload):
 
 
 @app.post("/devices/{mac}/block")
-def force_block(mac: str):
+def force_block(mac: str, request: Request):
     if is_excluded_device(mac):
         raise HTTPException(status_code=400, detail="The federated-learning server cannot be blocked as an IoT device.")
+    if getattr(request.state, "household_role", None) not in {"owner", "admin", "member"}:
+        raise HTTPException(status_code=403, detail="Household access is required.")
+    _ensure_household_device(mac)
     state = registry.find(mac.lower())
     target_ip = state.ip_address if state is not None else None
     success, detail = network_control.block_mac(mac, target_ip=target_ip)
@@ -798,24 +946,29 @@ def force_block(mac: str):
 
 
 @app.post("/wifi/connect")
-def wifi_connect(ssid: str, password: str):
+def wifi_connect(ssid: str, password: str, request: Request):
     """Lets the Pi join any Wi-Fi network on demand, instead of being locked
     to one. The Pi's IP will change after switching networks; re-fetch it
     (e.g. via /wifi/status or your router setup) and update the app's
     ROUTER_API_URL accordingly."""
+    require_household_admin(request)
     success, detail = wifi_client.connect(ssid, password)
     return {"success": success, "detail": detail}
 
 
 @app.get("/wifi/status")
-def wifi_status():
+def wifi_status(request: Request):
+    require_household_admin(request)
     return {"ssid": wifi_client.current_status()}
 
 
 @app.post("/devices/{mac}/unblock")
-def force_unblock(mac: str):
+def force_unblock(mac: str, request: Request):
     if is_excluded_device(mac):
         raise HTTPException(status_code=400, detail="The federated-learning server is not managed as an IoT device.")
+    if getattr(request.state, "household_role", None) not in {"owner", "admin", "member"}:
+        raise HTTPException(status_code=403, detail="Household access is required.")
+    _ensure_household_device(mac)
     success, detail = network_control.unblock_mac(mac)
     state = registry.find(mac.lower())
     if state is not None and success:
@@ -838,6 +991,8 @@ def ingest_demo_telemetry(payload: TelemetryPayload, request: Request):
             device_mac = payload.mac.lower()
         else:
             raise HTTPException(status_code=403, detail="This MAC address is reserved for the federated-learning server.")
+    if not storage.is_household_device(device_mac):
+        raise HTTPException(status_code=403, detail="Telemetry target is not registered to this household.")
     if storage.is_device_hidden(device_mac):
         storage.restore_device(device_mac)
     if payload.traffic_type is not None and payload.traffic_type.lower() not in {"attack", "normal", "benign"}:

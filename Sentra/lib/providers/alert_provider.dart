@@ -30,6 +30,14 @@ class AlertProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearCachedData() {
+    result = null;
+    scanResults = [];
+    notifications.clear();
+    _lastNotifiedStatus.clear();
+    notifyListeners();
+  }
+
   void startListening() {
     fetchLatestTraffic();
     _pollingTimer ??= Timer.periodic(

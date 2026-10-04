@@ -67,6 +67,9 @@ function App() {
   const [username, setUsername] = useState(
     () => sessionStorage.getItem("signal-watch-user") || "",
   );
+  const [householdRole, setHouseholdRole] = useState(
+    () => sessionStorage.getItem("household-role") || "",
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -79,10 +82,13 @@ function App() {
   if (!authenticated) {
     return (
       <LoginView
-        onLogin={(user) => {
+        onLogin={(user, role, email) => {
           sessionStorage.setItem("signal-watch-auth", "true");
           sessionStorage.setItem("signal-watch-user", user);
+          sessionStorage.setItem("signal-watch-email", email || "");
+          sessionStorage.setItem("household-role", role || "");
           setUsername(user);
+          setHouseholdRole(role || "");
           setAuthenticated(true);
         }}
         theme={theme}
@@ -94,6 +100,11 @@ function App() {
   return (
     <Dashboard
       username={username}
+      householdRole={householdRole}
+      onHouseholdRoleChange={(role) => {
+        sessionStorage.setItem("household-role", role || "");
+        setHouseholdRole(role || "");
+      }}
       theme={theme}
       onToggleTheme={toggleTheme}
       onLogout={() => {
@@ -104,7 +115,7 @@ function App() {
   );
 }
 
-function Dashboard({ username, onLogout, theme, onToggleTheme }) {
+function Dashboard({ username, householdRole, onHouseholdRoleChange, onLogout, theme, onToggleTheme }) {
   const [view, setView] = useState("devices");
   const [devices, setDevices] = useState([]);
   const [alerts, setAlerts] = useState([]);
@@ -246,6 +257,21 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
           </div>
         </header>
 
+        <HouseholdAccessPanel
+          role={householdRole}
+          onRoleChange={onHouseholdRoleChange}
+          onClaimed={() => {
+            Promise.all([loadDevices(), loadAlerts(), loadFederatedStatus()])
+              .then(() => {
+                setApiReady(true);
+                setError("");
+              })
+              .catch((requestError) => {
+                setApiReady(false);
+                setError(requestError.message);
+              });
+          }}
+        />
         <section className="flex flex-1 flex-col py-10 lg:flex-row lg:gap-16">
           <aside className="app-sidebar mb-10 shrink-0 lg:mb-0 lg:w-60">
             <p className="mb-5 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#62d6a7]">
@@ -315,6 +341,7 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
                   devices={devices}
                   alerts={alerts}
                   federatedStatus={federatedStatus}
+                  canManage={householdRole === "owner" || householdRole === "admin"}
                   onAdded={loadDevices}
                 />
               ) : view === "alerts" ? (
@@ -327,6 +354,7 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
                   error={federatedError}
                   onStartTraining={startFederatedTraining}
                   trainingStarting={trainingStarting}
+                  canManage={householdRole === "owner" || householdRole === "admin"}
                 />
               )}
             </div>
@@ -341,7 +369,7 @@ function Dashboard({ username, onLogout, theme, onToggleTheme }) {
   );
 }
 
-function FederatedView({ status, error, onStartTraining, trainingStarting }) {
+function FederatedView({ status, error, onStartTraining, trainingStarting, canManage }) {
   const participants = status?.participants || [];
   const updatedAt = status?.updated_at
     ? new Date(status.updated_at).toLocaleString()
@@ -396,15 +424,17 @@ function FederatedView({ status, error, onStartTraining, trainingStarting }) {
                   Round {training?.current_round ?? 0} of {training?.total_rounds ?? 10}
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={trainingActive}
-                onClick={onStartTraining}
-                className="inline-flex items-center gap-2 bg-[#62d6a7] px-4 py-3 text-sm font-semibold text-[#07111f] disabled:cursor-wait disabled:opacity-60"
-              >
-                {trainingStarting ? <LoaderCircle size={16} className="animate-spin" /> : <Network size={16} />}
-                {trainingStarting ? "Starting…" : training?.state === "running" ? "Training in progress" : "Update global model"}
-              </button>
+              {canManage && (
+                <button
+                  type="button"
+                  disabled={trainingActive}
+                  onClick={onStartTraining}
+                  className="inline-flex items-center gap-2 bg-[#62d6a7] px-4 py-3 text-sm font-semibold text-[#07111f] disabled:cursor-wait disabled:opacity-60"
+                >
+                  {trainingStarting ? <LoaderCircle size={16} className="animate-spin" /> : <Network size={16} />}
+                  {trainingStarting ? "Starting…" : training?.state === "running" ? "Training in progress" : "Update global model"}
+                </button>
+              )}
             </div>
           </>
         ) : !error ? (
@@ -424,11 +454,119 @@ function FederatedView({ status, error, onStartTraining, trainingStarting }) {
   );
 }
 
+function HouseholdAccessPanel({ role, onRoleChange, onClaimed }) {
+  const [pairingCode, setPairingCode] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [inviteCode, setInviteCode] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const claimGateway = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await apiFetch(`${API_URL}/gateway/claim`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairing_code: pairingCode }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Gateway claim failed.");
+      onRoleChange(data.household_role);
+      onClaimed();
+      setMessage("Gateway claimed for your household.");
+    } catch (requestError) {
+      setMessage(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createInvite = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setInviteCode("");
+    try {
+      const response = await apiFetch(`${API_URL}/household/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Invitation could not be created.");
+      setInviteCode(data.invite_code);
+      setMessage(`Invite for ${data.email} (${data.role}); share this code securely.`);
+    } catch (requestError) {
+      setMessage(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mt-5 border border-white/10 bg-[#0d1b2b] p-4 sm:p-5">
+      {role === "owner" || role === "admin" ? (
+        <form onSubmit={createInvite} className="grid gap-3 sm:grid-cols-[1fr_150px_auto]">
+          <input
+            type="email"
+            value={inviteEmail}
+            onChange={(event) => setInviteEmail(event.target.value)}
+            placeholder="Household member email"
+            className="border border-white/10 bg-white/[0.04] px-3 py-2 text-sm"
+            required
+          />
+          <select
+            value={inviteRole}
+            onChange={(event) => setInviteRole(event.target.value)}
+            className="border border-white/10 bg-[#0d1b2b] px-3 py-2 text-sm"
+          >
+            <option value="member">Member</option>
+            {role === "owner" && <option value="admin">Admin</option>}
+          </select>
+          <button disabled={busy} className="bg-[#62d6a7] px-4 py-2 text-sm font-semibold text-[#07111f] disabled:opacity-60">
+            {busy ? "Working…" : "Create invite"}
+          </button>
+        </form>
+      ) : role ? (
+        <p className="text-sm text-slate-300">Household access: {role}</p>
+      ) : (
+        <form onSubmit={claimGateway} className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <input
+            value={pairingCode}
+            onChange={(event) => setPairingCode(event.target.value)}
+            placeholder="One-time setup code from the Pi"
+            className="border border-white/10 bg-white/[0.04] px-3 py-2 text-sm"
+            required
+          />
+          <button disabled={busy} className="bg-[#62d6a7] px-4 py-2 text-sm font-semibold text-[#07111f] disabled:opacity-60">
+            {busy ? "Claiming…" : "Claim gateway"}
+          </button>
+        </form>
+      )}
+      {inviteCode && (
+        <p className="mt-3 break-all border border-white/10 p-3 font-mono text-xs text-[#62d6a7]">
+          {inviteCode}
+        </p>
+      )}
+      {message && <p className="mt-3 text-sm text-slate-300" role="status">{message}</p>}
+    </section>
+  );
+}
+
 function LoginView({ onLogin, theme, onToggleTheme }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [accessCode, setAccessCode] = useState("");
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -444,8 +582,8 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             creating
-              ? { name, email: username, password }
-              : { username, password },
+              ? { name, email: username, password, access_code: accessCode }
+              : { username, password, access_code: accessCode },
           ),
         },
       );
@@ -453,7 +591,7 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
       if (!response.ok) throw new Error(data.detail || "Login failed");
       if (!data.access_token) throw new Error("Update the backend to support gateway sessions.");
       sessionStorage.setItem("gateway-token", data.access_token);
-      onLogin(data.username);
+      onLogin(data.username, data.household_role, data.email);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -498,6 +636,17 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
             />
           </label>
         )}
+        <label className="mt-5 block text-xs uppercase tracking-widest text-slate-400">
+            {creating
+              ? "One-time gateway setup or household invite code"
+              : "Household invitation code (optional)"}
+            <input
+              value={accessCode}
+              onChange={(event) => setAccessCode(event.target.value)}
+              className="mt-2 w-full border border-white/10 bg-white/[0.04] px-3 py-3 text-sm outline-none focus:border-[#62d6a7]"
+              required={creating}
+            />
+          </label>
         <label
           className={`${creating ? "mt-5" : "mt-8"} block text-xs uppercase tracking-widest text-slate-400`}
         >
@@ -532,6 +681,19 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
               ? "Create account"
               : "Enter control room"}
         </button>
+        {!creating && (
+          <button
+            type="button"
+            onClick={() => {
+              setResetEmail(username);
+              setResetMessage("");
+              setResetOpen(true);
+            }}
+            className="mt-4 w-full text-sm text-[#62d6a7] hover:text-white"
+          >
+            Forgot password?
+          </button>
+        )}
         <button
           type="button"
           onClick={() => {
@@ -545,6 +707,96 @@ function LoginView({ onLogin, theme, onToggleTheme }) {
             : "New here? Create an account"}
         </button>
       </form>
+      {resetOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-5">
+          <form
+            className="w-full max-w-md border border-white/10 bg-[#0d1b2b] p-6"
+            onSubmit={(event) => event.preventDefault()}
+          >
+            <h2 className="font-display text-xl">Reset password</h2>
+            <label className="mt-5 block text-xs uppercase tracking-widest text-slate-400">
+              Account email
+              <input
+                type="email"
+                value={resetEmail}
+                onChange={(event) => setResetEmail(event.target.value)}
+                className="mt-2 w-full border border-white/10 bg-white/[0.04] px-3 py-3 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              className="mt-3 text-sm text-[#62d6a7]"
+              onClick={async () => {
+                setResetMessage("");
+                try {
+                  const response = await apiFetch(`${API_URL}/auth/request-password-reset`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email: resetEmail }),
+                  });
+                  const data = await response.json();
+                  if (!response.ok) throw new Error(data.detail || "Email delivery failed.");
+                  setResetMessage(data.message || "If the account exists, a reset code was sent.");
+                } catch (requestError) {
+                  setResetMessage(requestError.message);
+                }
+              }}
+            >
+              Send reset code
+            </button>
+            <label className="mt-4 block text-xs uppercase tracking-widest text-slate-400">
+              Email reset code
+              <input
+                value={resetCode}
+                onChange={(event) => setResetCode(event.target.value)}
+                className="mt-2 w-full border border-white/10 bg-white/[0.04] px-3 py-3 text-sm"
+              />
+            </label>
+            <label className="mt-4 block text-xs uppercase tracking-widest text-slate-400">
+              New password
+              <input
+                type="password"
+                value={resetPassword}
+                onChange={(event) => setResetPassword(event.target.value)}
+                className="mt-2 w-full border border-white/10 bg-white/[0.04] px-3 py-3 text-sm"
+              />
+            </label>
+            {resetMessage && <p className="mt-3 text-sm text-slate-300">{resetMessage}</p>}
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" onClick={() => setResetOpen(false)} className="text-sm text-slate-400">
+                Close
+              </button>
+              <button
+                type="button"
+                className="bg-[#62d6a7] px-4 py-2 text-sm font-semibold text-[#07111f]"
+                onClick={async () => {
+                  setResetMessage("");
+                  try {
+                    const response = await apiFetch(`${API_URL}/auth/reset-password`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        email: resetEmail,
+                        token: resetCode,
+                        new_password: resetPassword,
+                      }),
+                    });
+                    const data = await response.json();
+                    if (!response.ok || data.success !== true) {
+                      throw new Error(data.detail || data.error || "Password reset failed.");
+                    }
+                    setResetMessage("Password reset. You can sign in now.");
+                  } catch (requestError) {
+                    setResetMessage(requestError.message);
+                  }
+                }}
+              >
+                Reset password
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </main>
   );
 }
@@ -630,7 +882,7 @@ function ThemeToggle({ theme, onToggle }) {
   );
 }
 
-function DevicesView({ devices, alerts, federatedStatus, onAdded }) {
+function DevicesView({ devices, alerts, federatedStatus, canManage, onAdded }) {
   const [removeError, setRemoveError] = useState("");
   const setBlocked = async (device) => {
     setRemoveError("");
@@ -710,7 +962,7 @@ function DevicesView({ devices, alerts, federatedStatus, onAdded }) {
           detail="Sender telemetry cadence"
         />
       </div>
-      <AddDevicePanel onAdded={onAdded} />
+      {canManage && <AddDevicePanel onAdded={onAdded} />}
       {removeError && (
         <p className="mb-4 text-sm text-[#f58c7c]" role="alert">{removeError}</p>
       )}
@@ -720,7 +972,7 @@ function DevicesView({ devices, alerts, federatedStatus, onAdded }) {
             key={device.device_id}
             device={device}
             onSetBlocked={setBlocked}
-            onRemove={removeDevice}
+            onRemove={canManage ? removeDevice : null}
           />
         ))}
       </div>
@@ -855,13 +1107,15 @@ function DeviceCard({ device, onSetBlocked, onRemove }) {
           ? "Unblock device"
           : "Block device"}
       </button>
-      <button
-        type="button"
-        onClick={() => onRemove(device)}
-        className="mt-2 inline-flex w-full items-center justify-center gap-2 border border-white/10 px-4 py-2 text-xs text-slate-400 transition hover:border-[#f58c7c]/50 hover:text-[#f58c7c]"
-      >
-        <Trash2 size={14} /> Remove device
-      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={() => onRemove(device)}
+          className="mt-2 inline-flex w-full items-center justify-center gap-2 border border-white/10 px-4 py-2 text-xs text-slate-400 transition hover:border-[#f58c7c]/50 hover:text-[#f58c7c]"
+        >
+          <Trash2 size={14} /> Remove device
+        </button>
+      )}
     </article>
   );
 }

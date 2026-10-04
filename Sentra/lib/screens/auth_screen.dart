@@ -16,6 +16,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _accessCodeController = TextEditingController();
   bool _creating = false;
   bool _submitting = false;
 
@@ -24,6 +25,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _accessCodeController.dispose();
     super.dispose();
   }
 
@@ -36,8 +38,13 @@ class _AuthScreenState extends State<AuthScreen> {
             name: _nameController.text,
             email: _emailController.text,
             password: _passwordController.text,
+            accessCode: _accessCodeController.text,
           )
-        : await auth.signIn(_emailController.text, _passwordController.text);
+        : await auth.signIn(
+            _emailController.text,
+            _passwordController.text,
+            accessCode: _accessCodeController.text,
+          );
     if (!mounted) return;
     setState(() => _submitting = false);
     if (error != null) {
@@ -79,6 +86,20 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                         const SizedBox(height: 16),
                       ],
+                      TextFormField(
+                        controller: _accessCodeController,
+                        decoration: InputDecoration(
+                          labelText: _creating
+                              ? 'Gateway setup or household invite code'
+                              : 'Household invitation code (optional)',
+                          prefixIcon: const Icon(Icons.vpn_key_outlined),
+                        ),
+                        validator: (value) => _creating &&
+                                (value == null || value.trim().isEmpty)
+                            ? 'Enter the setup or invitation code'
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
@@ -124,6 +145,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final code = TextEditingController();
     final password = TextEditingController();
     String? message;
+    bool busy = false;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -135,29 +157,70 @@ class _AuthScreenState extends State<AuthScreen> {
               const SizedBox(height: 12),
               if (message != null) Text(message!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
               TextField(controller: code, decoration: const InputDecoration(labelText: 'Email reset code')),
-              TextField(controller: password, obscureText: true, decoration: const InputDecoration(labelText: 'New password')),
+              TextField(
+                controller: password,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'New password'),
+              ),
             ]),
           ),
           actions: [
             TextButton(
               onPressed: () async {
-                final result = await RouterApiService.requestPasswordReset(email.text.trim());
-                setDialogState(() => message = result['success'] == true ? 'Check your email for the code.' : result['error']?.toString());
+                setDialogState(() => busy = true);
+                try {
+                  final result = await RouterApiService.requestPasswordReset(email.text.trim());
+                  setDialogState(() {
+                    message = result['success'] == true
+                        ? result['message']?.toString() ?? 'Check your email for the code.'
+                        : result['error']?.toString() ?? 'Could not send a reset code.';
+                  });
+                } catch (error) {
+                  setDialogState(() => message = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+                } finally {
+                  if (dialogContext.mounted) setDialogState(() => busy = false);
+                }
               },
-              child: const Text('Send code'),
+              style: TextButton.styleFrom(),
+              child: busy ? const Text('Sending...') : const Text('Send code'),
             ),
             FilledButton(
               onPressed: () async {
-                final result = await RouterApiService.resetPassword(email: email.text.trim(), token: code.text.trim(), newPassword: password.text);
+                if (password.text.length < 8) {
+                  setDialogState(() => message = 'Use a password with at least 8 characters.');
+                  return;
+                }
+                setDialogState(() => busy = true);
+                Map<String, dynamic> result;
+                try {
+                  result = await RouterApiService.resetPassword(
+                    email: email.text.trim(),
+                    token: code.text.trim(),
+                    newPassword: password.text,
+                  );
+                } catch (error) {
+                  if (dialogContext.mounted) {
+                    setDialogState(() {
+                      message = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+                      busy = false;
+                    });
+                  }
+                  return;
+                }
                 if (!dialogContext.mounted) return;
+                setDialogState(() => busy = false);
                 if (result['success'] == true) {
                   Navigator.pop(dialogContext);
-                  ScaffoldMessenger.of(this.context).showSnackBar(const SnackBar(content: Text('Password reset. You can sign in now.')));
+                  if (mounted) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(content: Text('Password reset. You can sign in now.')),
+                    );
+                  }
                 } else {
                   setDialogState(() => message = result['error']?.toString() ?? 'Password reset failed.');
                 }
               },
-              child: const Text('Reset password'),
+              child: busy ? const CircularProgressIndicator() : const Text('Reset password'),
             ),
           ],
         ),

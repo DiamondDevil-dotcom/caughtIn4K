@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -19,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from federated_coordinator import FederatedCoordinator
-from gateway_auth import check_owner, issue_session, verify_session
+from gateway_auth import issue_session, verify_session
 
 LOCAL_DIR = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[2] if len(Path(__file__).resolve().parents) >= 3 else LOCAL_DIR
@@ -39,6 +40,7 @@ if BACKEND_ROLE not in {"gateway", "coordinator"}:
 FEDERATED_PROJECT_DIR = ROOT / "Ghost-1D GRU Model with EANGO on Full Dataset"
 FEDERATED_LOG_PATH = ROOT / "Database" / "federated_training.log"
 COORDINATOR = FederatedCoordinator(FEDERATED_PROJECT_DIR, ROUTER_API_URL, FEDERATED_LOG_PATH)
+CURRENT_USER_EMAIL: ContextVar[str] = ContextVar("current_gateway_user_email", default="")
 
 
 def latest_global_checkpoint() -> Path:
@@ -56,6 +58,9 @@ def router_request(method: str, path: str, **kwargs) -> Any:
     headers = kwargs.pop("headers", {})
     headers.setdefault("ngrok-skip-browser-warning", "true")
     headers.setdefault("User-Agent", "caughtIn4K-cloud-agent/1.0")
+    user_email = CURRENT_USER_EMAIL.get()
+    if user_email:
+        headers["X-Gateway-User"] = user_email
     router_token = os.getenv("GHOST_ROUTER_TOKEN", "")
     if router_token:
         headers["X-Gateway-Token"] = router_token
@@ -231,16 +236,22 @@ async def require_gateway_session(request: Request, call_next):
         "/health", "/login", "/signup", "/auth/login", "/auth/signup",
         "/auth/request-password-reset", "/auth/reset-password",
     }
+    context_token = None
     if BACKEND_ROLE == "gateway" and request.method != "OPTIONS" and request.url.path not in public_routes:
         try:
-            verify_session(request.headers.get("Authorization", ""))
+            request.state.user_email = verify_session(request.headers.get("Authorization", ""))
+            context_token = CURRENT_USER_EMAIL.set(request.state.user_email)
         except HTTPException as error:
             return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
     if BACKEND_ROLE == "coordinator":
         token = os.getenv("GHOST_ROUTER_TOKEN", "")
         if token and not hmac.compare_digest(request.headers.get("X-Gateway-Token", "").encode(), token.encode()):
             return JSONResponse(status_code=401, content={"detail": "Coordinator token required."})
-    return await call_next(request)
+    try:
+        return await call_next(request)
+    finally:
+        if context_token is not None:
+            CURRENT_USER_EMAIL.reset(context_token)
 
 app.add_middleware(
     CORSMiddleware,
@@ -349,12 +360,14 @@ ALERTS: List[Dict[str, Any]] = _dataset_alerts()
 class LoginRequest(BaseModel):
     username: str
     password: str
+    access_code: str = ""
 
 
 class SignupRequest(BaseModel):
     name: str
     email: str
     password: str
+    access_code: str = ""
 
 
 class RegisterDeviceRequest(BaseModel):
@@ -397,6 +410,13 @@ def _predict_device(device_id: str) -> Dict[str, Any]:
 
 @app.post("/live-predict")
 def live_predict(payload: LivePredictRequest):
+    if BACKEND_ROLE == "gateway":
+        device = next(
+            (item for item in router_devices() if item.get("mac") == payload.device_id.lower()),
+            None,
+        )
+        if device is None:
+            raise HTTPException(status_code=404, detail="Device not found")
     if not payload.features:
         raise HTTPException(status_code=400, detail="Device features are required.")
 
@@ -471,12 +491,38 @@ def telemetry(payload: Dict[str, Any]):
 def auth_action(action: str, payload: Dict[str, Any]):
     if action not in {"signup", "login", "change-password", "request-password-reset", "reset-password"}:
         raise HTTPException(status_code=404, detail="Unknown account action.")
-    if BACKEND_ROLE == "gateway":
-        check_owner(str(payload.get("email", "")))
+    if action == "change-password" and BACKEND_ROLE == "gateway":
+        user_email = CURRENT_USER_EMAIL.get()
+        if not user_email:
+            raise HTTPException(status_code=401, detail="Sign in again to change your password.")
+        payload = {**payload, "email": user_email}
     result = router_request("POST", f"/auth/{action}", json=payload)
+    if action == "request-password-reset" and result.get("success") is not True:
+        raise HTTPException(
+            status_code=503,
+            detail=result.get("error", "Password reset email could not be delivered."),
+        )
+    if action == "reset-password" and result.get("success") is not True:
+        raise HTTPException(status_code=400, detail=result.get("error", "Password reset failed."))
     if action in {"signup", "login"} and result.get("success") is True:
         result["access_token"] = issue_session(result["email"])
     return result
+
+
+@app.post("/gateway/claim")
+def claim_gateway(payload: Dict[str, Any]):
+    return router_request("POST", "/gateway/claim", json=payload)
+
+
+@app.post("/household/invites")
+def invite_household_member(payload: Dict[str, Any]):
+    return router_request("POST", "/household/invites", json=payload)
+
+
+@app.get("/household/role")
+def get_household_role():
+    role = router_request("GET", "/household/role").get("role")
+    return {"role": role}
 
 
 @app.post("/devices/register")
@@ -512,6 +558,10 @@ def unblock_device(mac: str) -> Dict[str, Any]:
 
 @app.get("/login-history")
 def list_login_history() -> Dict[str, List[Dict[str, Any]]]:
+    email = CURRENT_USER_EMAIL.get()
+    role = router_request("GET", "/household/role").get("role")
+    if role not in {"owner", "admin"}:
+        return {"logins": [event for event in LOGIN_EVENTS if event.get("username", "").lower() == email]}
     return {"logins": LOGIN_EVENTS}
 
 
@@ -521,15 +571,16 @@ def login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
     password = payload.password
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password are required.")
-    if BACKEND_ROLE == "gateway":
-        check_owner(username)
-
     name = username.split("@")[0].capitalize()
     email = username
     result = router_request(
             "POST",
             "/auth/login",
-            json={"email": username, "password": password},
+            json={
+                "email": username,
+                "password": password,
+                "access_code": payload.access_code,
+            },
         )
     if result.get("success") is not True:
         raise HTTPException(status_code=401, detail=result.get("error", "Invalid credentials."))
@@ -545,22 +596,27 @@ def login(payload: LoginRequest, request: Request) -> Dict[str, Any]:
     LOGIN_EVENTS.insert(0, login_event)
 
     return {"username": name, "email": email, "message": "Authentication successful",
+            "household_role": result.get("household_role"),
             "access_token": issue_session(email)}
 
 
 @app.post("/signup")
 def signup(payload: SignupRequest) -> Dict[str, Any]:
-    if BACKEND_ROLE == "gateway":
-        check_owner(payload.email)
     result = router_request(
         "POST",
         "/auth/signup",
-        json={"name": payload.name, "email": payload.email, "password": payload.password},
+        json={
+            "name": payload.name,
+            "email": payload.email,
+            "password": payload.password,
+            "access_code": payload.access_code,
+        },
     )
     if result.get("success") is not True:
         raise HTTPException(status_code=400, detail=result.get("error", "Account creation failed"))
     email = result.get("email", payload.email)
     return {"username": result.get("name", payload.name), "email": email,
+            "household_role": result.get("household_role"),
             "access_token": issue_session(email)}
 
 

@@ -9,6 +9,14 @@ class ActivityProvider extends ChangeNotifier {
   List<Map<String, dynamic>> events = [];
   String? lastError;
   Timer? _pollingTimer;
+  bool _fetching = false;
+  bool _disposed = false;
+
+  void clearCachedData() {
+    events = [];
+    lastError = null;
+    notifyListeners();
+  }
 
   void startPolling() {
     _fetch();
@@ -19,17 +27,33 @@ class ActivityProvider extends ChangeNotifier {
   }
 
   Future<void> _fetch() async {
+    if (_disposed || _fetching || !RouterApiService.hasSession) return;
+    _fetching = true;
+    final requestedUrl = RouterApiService.baseUrl;
+    final requestedSession = RouterApiService.sessionGeneration;
     try {
-      events = await RouterApiService.events();
+      final fetched = await RouterApiService.events();
+      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+          requestedSession != RouterApiService.sessionGeneration) {
+        return;
+      }
+      events = fetched;
       lastError = null;
     } catch (error) {
+      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+          requestedSession != RouterApiService.sessionGeneration) {
+        return;
+      }
       lastError = error.toString();
+    } finally {
+      _fetching = false;
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _pollingTimer?.cancel();
     super.dispose();
   }

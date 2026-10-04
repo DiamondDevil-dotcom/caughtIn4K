@@ -33,6 +33,18 @@ class GatewayTests(unittest.TestCase):
     def test_devices_require_sign_in(self):
         self.assertEqual(self.client.get("/devices").status_code, 401)
 
+    def test_live_prediction_rejects_accounts_without_device_access(self):
+        with patch.object(
+            backend, "router_request",
+            side_effect=backend.HTTPException(status_code=403, detail="Household access required."),
+        ):
+            response = self.client.post(
+                "/live-predict",
+                json={"device_id": "aa:bb:cc:dd:ee:ff", "features": {"HTTP": 1.0}},
+                headers=self.headers,
+            )
+        self.assertEqual(response.status_code, 403)
+
     def test_session_cannot_be_tampered_with(self):
         token = self.headers["Authorization"] + "tampered"
         self.assertEqual(self.client.get("/devices", headers={"Authorization": token}).status_code, 401)
@@ -88,8 +100,18 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_unapproved_owner_is_denied(self):
-        response = self.client.post("/auth/signup", json={"email": "stranger@example.com"})
-        self.assertEqual(response.status_code, 403)
+        with patch.object(backend, "router_request", return_value={
+            "success": False,
+            "error": "A valid household invitation is required.",
+        }) as router:
+            response = self.client.post(
+                "/auth/signup",
+                json={"name": "Stranger", "email": "stranger@example.com", "password": "test-pass"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["success"])
+        self.assertNotIn("access_token", response.json())
+        router.assert_called_once()
 
     def test_auth_changes_events_and_telemetry_proxy(self):
         for method, path, body, upstream in (
@@ -101,6 +123,34 @@ class GatewayTests(unittest.TestCase):
                 response = self.client.request(method, path, json=body, headers=self.headers)
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(router.call_args.args[:2], (method, upstream))
+
+    def test_authenticated_identity_is_forwarded_to_pi(self):
+        upstream = httpx.Response(
+            200,
+            json={"devices": []},
+            request=httpx.Request("GET", "https://pi.example/devices"),
+        )
+        with patch("app.httpx.request", return_value=upstream) as request:
+            response = self.client.get("/devices", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            request.call_args.kwargs["headers"]["X-Gateway-User"],
+            "owner@example.com",
+        )
+
+    def test_change_password_uses_signed_in_identity_not_client_email(self):
+        with patch.object(backend, "router_request", return_value={"success": True}) as router:
+            response = self.client.post(
+                "/auth/change-password",
+                json={
+                    "email": "someone-else@example.com",
+                    "current_password": "current",
+                    "new_password": "replacement",
+                },
+                headers=self.headers,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(router.call_args.kwargs["json"]["email"], "owner@example.com")
 
     def test_training_aliases_use_pi_not_local_simulation(self):
         for path in ("/federated/start", "/federated/train"):
