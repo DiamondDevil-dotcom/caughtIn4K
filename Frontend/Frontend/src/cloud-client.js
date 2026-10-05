@@ -1,3 +1,53 @@
+export function snapshotStale(snapshot, now = Date.now()) {
+  const time = Date.parse(snapshot?.observed_at);
+  return !snapshot || snapshot.data_stale || !snapshot.recent_contact ||
+    !Number.isFinite(time) || time > now || now - time > 90_000;
+}
+
+export function trainingReady(snapshot, now = Date.now()) {
+  const federated = snapshot?.model?.federated;
+  const time = Date.parse(federated?.observed_at);
+  return !snapshotStale(snapshot, now) && snapshot.training_available === true &&
+    Number.isFinite(time) && time <= now && now - time <= 30_000 &&
+    ["idle", "completed", "failed"].includes(federated?.training?.state);
+}
+
+export function recentWarnings(snapshot, now = Date.now()) {
+  if (snapshotStale(snapshot, now)) return [];
+  const visible = new Set(snapshot.devices.map(device => device.mac));
+  const warnings = new Map();
+  for (const event of snapshot.alerts) {
+    const time = Date.parse(event.timestamp);
+    if (event.status !== "WARNING" || !visible.has(event.mac) ||
+        !Number.isFinite(time) || time > now || now - time >= 60_000) continue;
+    const previous = warnings.get(event.mac);
+    if (!previous || time > Date.parse(previous.timestamp)) warnings.set(event.mac, event);
+  }
+  return [...warnings.values()];
+}
+
+export class LiveAlertTracker {
+  constructor() { this.seen = new Set(); this.initialized = false; }
+  reset() { this.seen.clear(); this.initialized = false; }
+  update(snapshot, now = Date.now()) {
+    if (snapshotStale(snapshot, now)) return [];
+    const next = new Set();
+    const fresh = [];
+    for (const event of snapshot.alerts) {
+      const key = `${event.event_id}:${event.timestamp}`;
+      next.add(key);
+      const time = Date.parse(event.timestamp);
+      if (this.initialized && !this.seen.has(key) &&
+          ["WARNING", "ATTACK", "ALERT", "BLOCKED"].includes(event.status) &&
+          Number.isFinite(time) && time <= now && now - time < 60_000 &&
+          snapshot.devices.some(device => device.mac === event.mac)) fresh.push(event);
+    }
+    this.seen = next;
+    this.initialized = true;
+    return fresh;
+  }
+}
+
 export class CloudClient {
   constructor(origin, { fetcher = globalThis.fetch.bind(globalThis), storage = globalThis.sessionStorage } = {}) {
     const url = new URL(origin);
@@ -27,7 +77,27 @@ export class CloudClient {
     });
     if (version !== this.generation) throw new Error("Account or home changed.");
     if (response.status !== expected) {
-      const error = new Error(`Request failed (HTTP ${response.status}). ${
+      let message;
+      if (path === "/cloud/auth/signup") {
+        message = response.status === 409
+          ? "An account with this email already exists. Sign in or use Forgot password."
+          : response.status >= 500
+          ? "The account service is temporarily unavailable. Try again shortly."
+          : response.status === 400 || response.status === 422
+          ? "Check your name, email address and password (8–1024 characters)."
+          : undefined;
+        if (response.status === 400) {
+          const safe = ["Enter a valid email address.", "Use a password between 8 and 1024 characters.", "Use a name between 1 and 200 characters."];
+          try {
+            const body = await response.json();
+            if (safe.includes(body?.detail)) message = body.detail;
+          } catch (failure) {
+            if (!(failure instanceof SyntaxError)) throw failure;
+            message = "The account service returned an unreadable error. Check your account details and retry.";
+          }
+        }
+      }
+      const error = new Error(message || `Request failed (HTTP ${response.status}). ${
         response.status === 401 ? "Sign in again." :
         response.status === 429 ? "Too many requests. Try again later." : "Check access or command status before retrying."}`);
       error.status = response.status;
@@ -40,9 +110,16 @@ export class CloudClient {
   }
 
   async login(email, password, name) {
+    email = email.trim();
+    if (name !== undefined) {
+      name = name.trim();
+      if (!name || name.length > 200) throw new Error("Use a name between 1 and 200 characters.");
+      if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
+      if (password.length < 8 || password.length > 1024) throw new Error("Use a password between 8 and 1024 characters.");
+    }
     const account = await this.request("POST", name ? "/cloud/auth/signup" : "/cloud/auth/login",
       { email, password, ...(name ? { name } : {}) }, name ? 201 : 200);
-    if (!account.access_token?.startsWith("cloud-v1.") || typeof account.email !== "string" ||
+    if (typeof account.account_id !== "string" || !account.access_token?.startsWith("cloud-v1.") || typeof account.email !== "string" ||
         typeof account.name !== "string") throw new Error("Invalid account response.");
     this.generation++;
     this.account = account;
@@ -125,12 +202,16 @@ export class CloudClient {
   async submit(mac, action, details = {}) {
     if (this.submitting || this.pending?.unconfirmed) throw new Error("Check the previous command before sending another.");
     if (!["owner", "admin"].includes(this.home?.role)) throw new Error("Only owners/admins can control the network.");
-    if (!["block", "unblock", "register", "remove"].includes(action) || !/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac)) {
+    if (!["block", "unblock", "register", "remove", "train"].includes(action) ||
+        (action === "train" ? mac !== null : !/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac))) {
       throw new Error("Invalid device action.");
     }
     this.submitting = true;
     try {
     const snapshot = await this.snapshot();
+    if (action === "train" && !trainingReady(snapshot)) {
+      throw new Error("Training is disabled, or laptop status is unavailable, stale or already running. No command sent.");
+    }
     if (["register", "remove"].includes(action) && !snapshot.device_management_available) {
       throw new Error("Device management requires the Pi update. No command sent.");
     }
@@ -138,11 +219,10 @@ export class CloudClient {
         details.device_name.length > 200 || typeof details.ip_address !== "string")) {
       throw new Error("Enter a device name and optional IPv4 address.");
     }
-    if (snapshot.data_stale || !snapshot.recent_contact ||
-        Date.now() - Date.parse(snapshot.observed_at) > 90_000) throw new Error("Gateway offline or stale. No command sent.");
+    if (snapshotStale(snapshot)) throw new Error("Gateway offline or stale. No command sent.");
     const id = globalThis.crypto.randomUUID();
     const path = this.path();
-    if (action !== "register" && !snapshot.devices.some((device) => device.mac === mac)) throw new Error("Device is no longer reported by this Pi.");
+    if (!["register", "train"].includes(action) && !snapshot.devices.some((device) => device.mac === mac)) throw new Error("Device is no longer reported by this Pi.");
     this.pending = { id, path, gateway_id: this.home.gateway_id, mac, action, unconfirmed: true };
     this.storage.setItem(`customer-command:${this.account.account_id}`, JSON.stringify(this.pending));
     try {

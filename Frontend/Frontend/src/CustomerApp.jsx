@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CloudClient } from "./cloud-client";
+import { CloudClient, LiveAlertTracker, recentWarnings, snapshotStale, trainingReady } from "./cloud-client";
 import "./customer.css";
 
 export default function CustomerApp() {
@@ -9,24 +9,66 @@ export default function CustomerApp() {
   const [homes, setHomes] = useState([]);
   const [snapshot, setSnapshot] = useState(null);
   const [error, setError] = useState("");
+  const [syncError, setSyncError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [signup, setSignup] = useState(false);
   const [recovery, setRecovery] = useState(false);
   const [tick, setTick] = useState(0);
   const [now, setNow] = useState(Date.now());
+  const [tab, setTab] = useState("Home");
+  const [light, setLight] = useState(() => localStorage.getItem("customer-theme") === "light");
+  const [notifications, setNotifications] = useState(false);
+  const [liveAlerts, setLiveAlerts] = useState([]);
+  const [notificationError, setNotificationError] = useState("");
+  const alertTracker = useRef(new LiveAlertTracker());
+  const notificationsRef = useRef(false);
+  const openNotifications = useRef(new Set());
   const mounted = useRef(true);
   const running = useRef(false);
   const choosingHome = useRef(false);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { mounted.current = true; return () => {
+    mounted.current = false;
+    for (const notification of openNotifications.current) notification.close();
+    openNotifications.current.clear();
+  }; }, []);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 5000);
+    const timer = setInterval(() => setNow(Date.now()), 2000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    document.documentElement.dataset.customerTheme = light ? "light" : "dark";
+    localStorage.setItem("customer-theme", light ? "light" : "dark");
+  }, [light]);
+  useEffect(() => {
+    const enabled = Boolean(account && sessionStorage.getItem(`customer-notifications:${account.account_id}`) === "true");
+    notificationsRef.current = enabled;
+    setNotifications(enabled);
+  }, [account?.account_id]);
+
+  async function toggleNotifications() {
+    setNotificationError("");
+    if (notifications) {
+      notificationsRef.current = false; setNotifications(false);
+      for (const notification of openNotifications.current) notification.close();
+      openNotifications.current.clear();
+      sessionStorage.removeItem(`customer-notifications:${account.account_id}`);
+      return;
+    }
+    if (!("Notification" in window)) throw new Error("This browser does not support desktop notifications. Live alerts remain visible on Home.");
+    if (await Notification.requestPermission() !== "granted") throw new Error("Notifications were not allowed. Enable them in your browser's site settings.");
+    notificationsRef.current = true; setNotifications(true);
+    sessionStorage.setItem(`customer-notifications:${account.account_id}`, "true");
+    setMessage("Live browser notifications enabled while this website is open. Closed-browser push is not enabled.");
+  }
 
   function logout() {
     choosingHome.current = false;
-    cloud.logout(); setAccount(null); setHome(null); setHomes([]); setSnapshot(null); setError(""); setMessage("");
+    notificationsRef.current = false;
+    for (const notification of openNotifications.current) notification.close();
+    openNotifications.current.clear();
+    alertTracker.current.reset(); setLiveAlerts([]);
+    cloud.logout(); setAccount(null); setHome(null); setHomes([]); setSnapshot(null); setError(""); setSyncError(""); setNotificationError(""); setMessage(""); setTab("Home");
   }
 
   async function run(action) {
@@ -40,7 +82,19 @@ export default function CustomerApp() {
 
   function choose(choice) {
     choosingHome.current = false;
-    cloud.select(choice); setHome(choice); setSnapshot(null); setError("");
+    alertTracker.current.reset(); setLiveAlerts([]);
+    for (const notification of openNotifications.current) notification.close();
+    openNotifications.current.clear();
+    cloud.select(choice); setHome(choice); setSnapshot(null); setError(""); setSyncError(""); setMessage(""); setTab("Home");
+  }
+
+  function manageHomes() {
+    choosingHome.current = true;
+    cloud.select(null);
+    alertTracker.current.reset(); setLiveAlerts([]);
+    for (const notification of openNotifications.current) notification.close();
+    openNotifications.current.clear();
+    setHome(null); setSnapshot(null); setSyncError(""); setError(""); setMessage(""); setTab("Home");
   }
 
   useEffect(() => {
@@ -63,18 +117,61 @@ export default function CustomerApp() {
       fetching = true;
       try {
         const data = await cloud.snapshot();
-        if (active) { setSnapshot(data); setError(""); }
-      } catch (failure) { if (active) setError(failure.message); }
+        if (active) {
+          setSnapshot(data); setSyncError("");
+          const alerts = alertTracker.current.update(data);
+          if (alerts.length) {
+            setLiveAlerts(previous => [...alerts, ...previous].slice(0, 20));
+            if (notificationsRef.current && "Notification" in window && Notification.permission === "granted") {
+              try {
+                for (const event of alerts) {
+                  const version = cloud.generation;
+                  const notification = new Notification(`caughtIn4K: ${event.status}`, {
+                    body: "A threat event was reported by your home gateway. Open Activity for details.",
+                    tag: `${home.gateway_id}:${event.event_id}:${event.timestamp}`,
+                  });
+                  notification.onclick = () => {
+                    if (mounted.current && version === cloud.generation) { window.focus(); setTab("Activity"); }
+                    notification.close();
+                  };
+                  openNotifications.current.add(notification);
+                  setTimeout(() => { notification.close(); openNotifications.current.delete(notification); }, 10_000);
+                }
+              } catch (failure) {
+                console.error("Browser notification display failed:", failure.name);
+                notificationsRef.current = false; setNotifications(false);
+                sessionStorage.removeItem(`customer-notifications:${account.account_id}`);
+                setNotificationError("This browser could not display a notification. Live alerts remain on Home and Activity; desktop notifications have been disabled.");
+              }
+            }
+          }
+        }
+      } catch (failure) { if (active) setSyncError(failure.message); }
       finally { fetching = false; }
     };
     refresh();
-    const timer = setInterval(refresh, 15_000);
-    return () => { active = false; clearInterval(timer); };
+    const timer = setInterval(refresh, 2000);
+    window.addEventListener("focus", refresh);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", refresh); };
   }, [home]);
 
-  const stale = !snapshot || snapshot.data_stale || !snapshot.recent_contact || Boolean(error) ||
-      now - Date.parse(snapshot.observed_at) > 90_000;
+  const checkedAt = Math.max(now, Date.now());
+  const stale = snapshotStale(snapshot, checkedAt) || Boolean(syncError);
   const canControl = ["owner", "admin"].includes(home?.role);
+  const warnings = recentWarnings(snapshot, checkedAt);
+  const federated = snapshot?.model?.federated;
+  const training = federated?.training;
+  const trainEnabled = !stale && trainingReady(snapshot, checkedAt);
+  const commandSuccess = action => action === "train"
+    ? "Your Pi confirmed the laptop accepted training startup. Watch round progress below; this is not completion."
+    : action === "register" ? "Device added on your Pi. It may take up to 30 seconds to appear."
+    : "Your Pi confirmed the device action.";
+  const checkCommand = async () => {
+    const result = await cloud.commandStatus();
+    setMessage(result.status === "succeeded" ? commandSuccess(result.action)
+      : `Command: ${result.status}. Check before retrying; no start has been replayed.`);
+    if (result.status === "succeeded") setSnapshot(await cloud.snapshot());
+  };
   function values(event) { event.preventDefault(); return Object.fromEntries(new FormData(event.currentTarget)); }
 
   async function control(device) {
@@ -92,14 +189,12 @@ export default function CustomerApp() {
         if (version !== cloud.generation) throw new Error("Account changed; check the command before retrying.");
         const result = await cloud.commandStatus();
         if (result.status === "succeeded") {
-          setMessage(action === "register"
-            ? "Device added on your Pi. It may take up to 30 seconds to appear."
-            : "Your Pi confirmed the device action.");
+          setMessage(commandSuccess(action));
           setSnapshot(await cloud.snapshot());
           return;
         }
         if (!["queued", "delivered"].includes(result.status)) {
-          throw new Error(`Network action not confirmed: ${result.status}. Check device state.`);
+          throw new Error(`Command not confirmed: ${result.status}. Check ${action === "train" ? "training" : "device"} state before retrying.`);
         }
         await new Promise((resolve) => setTimeout(resolve, 3000));
       }
@@ -111,6 +206,8 @@ export default function CustomerApp() {
       {account && <button disabled={busy} onClick={logout}>Sign out</button>}
     </header>
     {error && <p role="alert" className="customer-error">{error}</p>}
+    {syncError && <p role="alert" className="customer-error">Live updates: {syncError}</p>}
+    {notificationError && <p role="alert" className="customer-error">{notificationError}</p>}
     {message && <p role="status">{message}</p>}
     {!account ? <section className="customer-panel">
       <h2>{recovery ? "Recover your account" : signup ? "Create an account" : "Sign in"}</h2>
@@ -126,7 +223,7 @@ export default function CustomerApp() {
         });
       }}>
         {signup && !recovery && <label>Name<input name="name" required maxLength={200} /></label>}
-        <label>Email<input name="email" type="email" required autoComplete="email" /></label>
+        <label>Email<input name="email" type="email" required maxLength={254} autoComplete="email" autoCapitalize="none" spellCheck={false} /></label>
         {recovery && <label>Email reset code<input name="token" required maxLength={256} /></label>}
         <label>{recovery ? "New password" : "Password"}<input name="password" type="password" required minLength={8} maxLength={1024} autoComplete={signup || recovery ? "new-password" : "current-password"} /></label>
         <button disabled={busy}>{busy ? "Please wait..." : recovery ? "Reset password" : signup ? "Create account" : "Sign in"}</button>
@@ -168,20 +265,63 @@ export default function CustomerApp() {
         setTick((value) => value + 1);
       }); }}><label>Household invitation code<input name="code" required /></label><button disabled={busy}>Join home</button></form>
     </section> : <>
+      <nav className="customer-tabs" aria-label="Dashboard sections">
+        {["Home", "Devices", "Activity", "Settings"].map(name =>
+          <button key={name} aria-current={tab === name ? "page" : undefined}
+            onClick={() => setTab(name)}>{name}</button>)}
+      </nav>
+      {cloud.pending?.unconfirmed && <section className="customer-panel" aria-label="Command recovery">
+        <p>A {cloud.pending.action === "train" ? "training start" : "device action"} is awaiting confirmation. Do not send it again.</p>
+        <button disabled={busy} onClick={() => run(checkCommand)}>Check command status</button>
+      </section>}
+      <div className="customer-tab">
+      <div hidden={tab !== "Home"}>
       <section className="customer-panel"><h2>{home.name}</h2><p>{home.gateway_name} · {home.role}</p>
-        <button disabled={busy} onClick={() => { choosingHome.current = true; cloud.select(null); setHome(null); setSnapshot(null); }}>Manage homes</button>
-        <p>{stale ? "Your home is offline or updates are delayed. Showing the last update." : "Your home is connected. Updates may take up to 30 seconds."}</p>
+        <button disabled={busy} onClick={manageHomes}>Manage homes</button>
+        <p>{stale ? "Your home is offline or updates are delayed. Showing the last update." : "Your home is connected. Checking updates every 2 seconds."}</p>
+        {!stale && warnings.map(event => <p key={event.mac} role="status">
+          Recent WARNING: {snapshot.devices.find(device => device.mac === event.mac)?.name || event.mac}.
+          Detected in the last 60 seconds; current status is shown separately.
+        </p>)}
         {snapshot && <p>Updated: {new Date(snapshot.observed_at).toLocaleString()}</p>}
+        <div className="customer-stats">
+          <p><strong>{snapshot?.devices.length ?? 0}</strong> Devices</p>
+          <p><strong>{snapshot?.devices.filter(device => device.blocked).length ?? 0}</strong> Blocked</p>
+          <p><strong>{warnings.length}</strong> Recent warnings</p>
+        </div>
       </section>
+      <section className="customer-panel"><h2>Threat detection &amp; global model</h2>
+        <p>{snapshot?.model.available ? "Detection model available on your home gateway." : "Waiting for a detection-model update from your home gateway."}</p>
+        <p>Training: {training?.state || "unavailable"}{training && ` · ${training.current_round}/${training.total_rounds} rounds`}</p>
+        <p>Pi checkpoint: {Number.isInteger(federated?.federated_round) ? `round ${federated.federated_round}` : "not yet reported"}</p>
+        {training?.error && <p role="status">{training.error}</p>}
+        {canControl ? <>
+          <button disabled={busy || !trainEnabled || cloud.pending?.unconfirmed}
+            onClick={() => {
+              if (window.confirm("Start real federated training on the laptop and Pi? Keep the coordinator running and connected to the Pi network.")) run(() => execute(null, "train"));
+            }}>Update global model</button>
+          {!trainEnabled && <p>{!snapshot?.training_available ? "Training rollout is not enabled." : training?.state === "running" ? "Training is in progress. Do not start another run." : "Waiting for fresh laptop coordinator status. Monitoring continues independently."}</p>}
+        </> : <p>Only household owners and admins can update the global model.</p>}
+        <p>Startup acceptance is not training completion. Coordinator rounds and the Pi checkpoint are reported separately.</p>
+      </section>
+      <section className="customer-panel"><h2>Live alerts</h2>
+        <p role="status" aria-live="polite">{liveAlerts.length ? `Latest event: ${liveAlerts[0].status}` : "New threat events will appear here while this page is open."}</p>
+        {liveAlerts.slice(0, 5).map(alert => <p key={`${alert.event_id}:${alert.timestamp}`}>
+          {alert.status} · {snapshot?.devices.find(device => device.mac === alert.mac)?.name || alert.mac} · {new Date(alert.timestamp).toLocaleTimeString()}
+        </p>)}
+      </section>
+      </div>
+      <div hidden={tab !== "Devices"}>
       <section className="customer-panel"><h2>Devices</h2>
         {!snapshot && <p>Waiting for a gateway snapshot...</p>}
         {snapshot?.devices.length === 0 && <p>No devices reported yet.</p>}
         {snapshot?.devices.map((device) => <article className="customer-device" key={device.mac}>
           <div><h3>{device.name}</h3><p>{device.mac} · {device.ip_address || "IP not reported"}</p>
-            <p>{device.status} · {device.attack_probability}% attack probability</p></div>
+            <p>{device.status} · {device.attack_probability}% attack probability</p>
+            {!stale && warnings.some(event => event.mac === device.mac) && <p>Recent WARNING detected on this device (last 60 seconds).</p>}</div>
           <button disabled={busy || stale || !canControl || cloud.pending?.unconfirmed}
             onClick={() => control(device)}>{busy && cloud.pending?.mac === device.mac ? "Waiting for Pi..." : device.blocked ? "Unblock" : "Block"}</button>
-          {canControl && <button disabled={busy || stale || cloud.pending?.unconfirmed} onClick={() => {
+          {canControl && <button disabled={busy || stale || !snapshot?.device_management_available || cloud.pending?.unconfirmed} onClick={() => {
             if (window.confirm(`Remove ${device.name}? Its device record and detection history will be deleted on the Pi. A blocked device will first be unblocked.`)) {
               run(() => execute(device.mac, "remove"));
             }
@@ -195,21 +335,25 @@ export default function CustomerApp() {
           <label>Device name<input name="name" required maxLength={200} /></label>
           <label>MAC address<input name="mac" required pattern="([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}" /></label>
           <label>IP address (optional)<input name="ip" /></label>
-          <button disabled={busy || stale || cloud.pending?.unconfirmed}>Add device</button>
+          <button disabled={busy || stale || !snapshot?.device_management_available || cloud.pending?.unconfirmed}>Add device</button>
         </form>}
         {!canControl && <p>Read-only: only owners/admins can manage devices.</p>}
-        {cloud.pending?.unconfirmed && <><p>A device action is awaiting confirmation.</p><button disabled={busy} onClick={() => run(async () => {
-          const result = await cloud.commandStatus();
-          setMessage(result.status === "succeeded" ? "Your Pi confirmed the device action." : `Device action: ${result.status}. Check before retrying.`);
-          if (result.status === "succeeded") setSnapshot(await cloud.snapshot());
-        })}>Check command status</button></>}
       </section>
-      <section className="customer-panel"><h2>Threat detection</h2>
-        <p>{snapshot?.model.available ? "Detection model available on your home gateway." : "Waiting for a detection-model update from your home gateway."}</p>
-      </section>
-      <section className="customer-panel"><h2>Recent alerts</h2>
+      </div>
+      <div hidden={tab !== "Activity"}>
+      <section className="customer-panel"><h2>Activity</h2>
+        <p>Real Pi detection history, refreshed every 2 seconds. {stale && "Updates are delayed; showing the last received history."}</p>
+        {snapshot?.alerts.length === 0 && <p>No detection events reported yet.</p>}
         {snapshot?.alerts.map((alert) => <p key={alert.event_id}>
-          {new Date(alert.timestamp).toLocaleString()} · {alert.mac} · {alert.status} · {alert.attack_probability}%</p>)}
+          {new Date(alert.timestamp).toLocaleString()} · {snapshot.devices.find(device => device.mac === alert.mac)?.name || alert.mac} · {alert.status} · {alert.attack_probability}%</p>)}
+      </section>
+      </div>
+      <div hidden={tab !== "Settings"}>
+      <section className="customer-panel"><h2>Settings</h2>
+        <p>{account.name} · {account.email}</p><p>{home.name} · Role: {home.role}</p>
+        <button aria-pressed={light} onClick={() => setLight(value => !value)}>{light ? "Use dark theme" : "Use light theme"}</button>
+        <button disabled={busy} aria-pressed={notifications} onClick={() => run(toggleNotifications)}>{notifications ? "Mute live browser notifications" : "Enable live browser notifications"}</button>
+        <p>Browser notifications require permission and an open website. They are independent of your phone notification preference.</p>
       </section>
       {canControl && <section className="customer-panel"><h2>Invite a household member</h2>
         <form onSubmit={(event) => { const data = values(event); run(async () => {
@@ -227,6 +371,8 @@ export default function CustomerApp() {
       }}><label>Current password<input name="current" type="password" required /></label>
         <label>New password<input name="next" type="password" required minLength={8} maxLength={1024} /></label>
         <button disabled={busy}>Change password</button></form></section>
+      </div>
+      </div>
     </>}
   </main>;
 }

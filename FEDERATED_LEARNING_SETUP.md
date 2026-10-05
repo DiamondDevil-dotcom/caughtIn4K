@@ -265,6 +265,47 @@ then run one real training cycle and confirm both laptop/Pi participants, round
 progress, coordinator completion and the new Pi checkpoint. A passing button
 test alone is not proof of federated training.
 
+### Website and mobile synchronization
+
+The customer website uses the same account, household, gateway snapshots and
+command queue as the mobile app. Home, Devices, Activity and Settings tabs show
+real Pi data; there are no simulated devices or independent website model runs.
+Both clients poll every two seconds while active. A command acknowledged by
+the Pi becomes visible to the other client through the next fresh snapshot.
+Browser background throttling, network delay and a sleeping backend can slow
+that interval; returning focus to the website requests a fresh snapshot.
+
+The website includes real gateway-scoped federated training with null MAC,
+owner/admin checks, rollout and fresh-coordinator guards, startup acknowledgement
+distinct from completion, round progress and a separate Pi checkpoint round.
+Uncertain commands remain recoverable by UUID without automatic replay.
+Recent warnings remain visible for 60 seconds independently of current blocked
+state. Activity uses the same uploaded event history as the customer app.
+
+Optional browser notifications require explicit permission, are scoped to the
+current signed-in account/home, and alert only on new recent threat events,
+not the initial history. They work only while the website is open; closed-browser
+web push is not implemented. Preferences are browser-local and do not change
+Android push preferences. Muting, leaving a home or signing out closes current
+browser notifications. Notification display failure is shown explicitly and
+does not stop live snapshots. Themes and tab presentation are also client-local.
+
+Build from `Frontend/Frontend` with
+`VITE_CLOUD_API_URL=https://caughtin4k-1.onrender.com`. Configure the customer
+Render service's `GHOST_CLOUD_WEB_ORIGINS` with the exact production website
+origin (for the existing deployment, `https://caught-in4-k.vercel.app`), keeping
+any other deliberately authorized HTTPS origins. Do not add wildcards, paths,
+tokens, database URLs or service-account JSON to frontend configuration.
+Deploy the rebuilt Vite source through Vercel; do not commit generated `dist`.
+Local HTTP previews are for UI tests; the production backend deliberately
+accepts only its configured HTTPS browser origins.
+
+Run `node --test src/cloud-client.test.js` and `npm run build` before deployment.
+Then use the same household on phone and deployed website to verify a real
+device control from each direction, new parallel-device warning/block events,
+Activity refresh, and coordinator/checkpoint progress. Pure UI mock tests do
+not establish live cross-client synchronization.
+
 ### Consumer cloud foundation setup
 
 The legacy deployment below uses one Pi household. The opt-in PostgreSQL
