@@ -239,6 +239,71 @@ void main() {
     },
   );
 
+  test('unconfirmed training survives restart without a fake MAC or automatic replay', () async {
+    String? id;
+    var starts = 0;
+    await http.runWithClient(
+      () async {
+        await CloudApiService.login(
+          account['email'] as String,
+          'test-password',
+        );
+        CloudApiService.select(gateway);
+        await expectLater(
+          CloudApiService.control(null, 'train', pollInterval: Duration.zero),
+          throwsException,
+        );
+        expect(CloudApiService.commandUnconfirmed, isTrue);
+        await RouterApiService.init();
+        CloudApiService.select(gateway);
+        expect(CloudApiService.lastCommandId, id);
+        expect(CloudApiService.lastCommandMac, isNull);
+        expect(CloudApiService.lastCommandAction, 'train');
+        await expectLater(
+          CloudApiService.control(null, 'train'),
+          throwsException,
+        );
+        expect(starts, 1);
+      },
+      () => MockClient((request) async {
+        if (request.url.path.endsWith('/login')) return reply(account);
+        if (request.url.path.endsWith('/snapshot')) {
+          return reply({
+            ...snapshot(),
+            'training_available': true,
+            'model': {
+              'available': true,
+              'federated': {
+                'observed_at': DateTime.now().toUtc().toIso8601String(),
+                'status': 'pretrained',
+                'training': {
+                  'state': 'idle',
+                  'current_round': 0,
+                  'total_rounds': 10,
+                },
+              },
+            },
+          });
+        }
+        if (request.method == 'POST') {
+          starts++;
+          id = (jsonDecode(request.body) as Map)['command_id'] as String;
+          return reply({
+            'id': id,
+            'gateway_id': 'gateway-a',
+            'mac': null,
+            'action': 'train',
+          }, 202);
+        }
+        return reply({
+          'id': id,
+          'gateway_id': 'gateway-a',
+          'status': 'unknown',
+        });
+      }),
+    );
+  });
+
   testWidgets(
     'one home opens automatically but explicit home management stays accessible',
     (tester) async {

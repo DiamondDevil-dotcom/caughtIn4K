@@ -8,6 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 import router_ids_agent as router
 
@@ -140,6 +141,52 @@ class PiAuthorizationTests(unittest.TestCase):
                 headers={"X-Gateway-Token": "private-gateway-test-token"},
             )
         self.assertEqual(response.status_code, 200)
+
+    def test_cloud_training_is_private_loopback_flagged_and_truthfully_acknowledged(self):
+        client = TestClient(router.app, client=("127.0.0.1", 50000))
+        payload = {
+            "command_id": str(uuid4()), "mac": None, "action": "train",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat(),
+        }
+        headers = {"X-Gateway-Token": "private-gateway-test-token"}
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_CONTROL_ENABLED": "true", "GHOST_CLOUD_TRAINING_ENABLED": "true"}),
+            patch.object(router, "request_federated_training", return_value={"success": True}) as start,
+        ):
+            self.assertEqual(client.post("/cloud-agent/control", json=payload).status_code, 401)
+            self.assertEqual(self.client.post("/cloud-agent/control", json=payload, headers=headers).status_code, 403)
+            start.assert_not_called()
+            with patch.dict(os.environ, {"GHOST_CLOUD_TRAINING_ENABLED": "false"}):
+                self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).status_code, 404)
+            start.assert_not_called()
+            result = client.post("/cloud-agent/control", json=payload, headers=headers)
+            self.assertEqual(result.json(), {"success": True, "result_code": "applied"})
+            start.assert_called_once_with()
+            start.side_effect = HTTPException(status_code=502, detail="Coordinator unavailable")
+            self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).json(),
+                {"success": False, "result_code": "local_unreachable"})
+            start.side_effect = HTTPException(status_code=409, detail="Already running")
+            self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).json(),
+                {"success": False, "result_code": "local_rejected"})
+
+    def test_cloud_training_progress_is_real_bounded_and_does_not_export_private_errors(self):
+        with patch.object(router, "federated_status", return_value={
+            "status": "federated", "federated_round": 4,
+            "training": {"state": "running", "current_round": 5, "total_rounds": 10,
+                         "error": "/private/path", "raw_training_rows": ["private"]},
+        }):
+            router._refresh_cloud_federated_status()
+        metadata = router._cloud_federated_status
+        self.assertEqual(metadata["training"]["current_round"], 5)
+        self.assertEqual(metadata["federated_round"], 4)
+        self.assertNotIn("raw_training_rows", metadata["training"])
+        self.assertIsNone(metadata["training"]["error"])
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_TRAINING_ENABLED": "true"}),
+            patch.object(router.threading, "Thread") as thread,
+        ):
+            self.assertEqual(router.cloud_federated_metadata(), metadata)
+            thread.assert_not_called()
 
     def test_cloud_control_requires_explicit_flag_private_token_and_loopback(self):
         payload = {

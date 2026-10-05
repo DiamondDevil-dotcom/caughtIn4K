@@ -32,9 +32,12 @@ def validate_command(command: object) -> dict:
         UUID(command["command_id"])
         deadline = datetime.fromisoformat(command["expires_at"])
         if (
-            command["action"] not in {"block", "unblock", "register", "remove"}
-            or not isinstance(command["mac"], str)
-            or re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}", command["mac"]) is None
+            command["action"] not in {"block", "unblock", "register", "remove", "train"}
+            or (command["action"] == "train" and command["mac"] is not None)
+            or (command["action"] != "train" and (
+                not isinstance(command["mac"], str)
+                or re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}", command["mac"]) is None
+            ))
             or deadline.tzinfo is None
         ):
             raise ValueError
@@ -68,7 +71,9 @@ def apply_local(config: UploadConfig, opener, command: dict) -> dict:
         return {"success": False, "result_code": "local_unreachable"}
     if (
         type(result.get("success")) is not bool
-        or result.get("result_code") not in {"applied", "enforcement_failed", "expired"}
+        or result.get("result_code") not in {
+            "applied", "enforcement_failed", "expired", "local_unreachable", "local_rejected",
+        }
         or result["success"] != (result["result_code"] == "applied")
     ):
         raise PermanentUploadError("Local Pi control returned an invalid acknowledgement.")

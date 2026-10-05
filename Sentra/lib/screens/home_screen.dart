@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../services/cloud_api_service.dart';
+
 import 'package:google_fonts/google_fonts.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:provider/provider.dart';
@@ -410,6 +413,24 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _federatedModelCard(RouterDeviceProvider provider) {
     if (RouterApiService.cloudMode) {
       final model = provider.federatedStatus?['cloud_model'];
+      final federated = model is Map ? model['federated'] : null;
+      final training = federated is Map ? federated['training'] : null;
+      final observed = federated is Map
+          ? DateTime.tryParse(federated['observed_at'] as String? ?? '')
+          : null;
+      final fresh =
+          !provider.cloudDataStale &&
+          observed != null &&
+          DateTime.now().difference(observed).inSeconds <= 30 &&
+          !observed.isAfter(DateTime.now());
+      final running = training is Map && training['state'] == 'running';
+      final canManage = {'owner', 'admin'}.contains(CloudApiService.role);
+      final ready =
+          fresh &&
+          training is Map &&
+          {'idle', 'completed', 'failed'}.contains(training['state']) &&
+          CloudApiService.lastSnapshot?['training_available'] == true;
+      final round = federated is Map ? federated['federated_round'] : null;
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(18),
@@ -417,7 +438,7 @@ class _HomeScreenState extends State<HomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Threat detection',
+                'Federated model',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               Text(
@@ -425,6 +446,82 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? 'Detection model available on your home gateway.'
                     : 'Waiting for a detection-model update from your home gateway.',
               ),
+              const SizedBox(height: 8),
+              if (federated is Map)
+                Text(
+                  federated['status'] == 'federated'
+                      ? 'Pi checkpoint: FedAvg global model, round ${round ?? "unknown"}.'
+                      : federated['status'] == 'pretrained'
+                      ? 'Pi is using its pretrained checkpoint.'
+                      : 'Pi model status unavailable.',
+                ),
+              const Text(
+                'Real training participants: laptop and Raspberry Pi.',
+              ),
+              if (training is Map && fresh) ...[
+                Text(
+                  'Training: ${training['state']} · round ${training['current_round']}/${training['total_rounds']}',
+                ),
+                if (training['error'] is String)
+                  Text(training['error'] as String),
+                if (training['state'] == 'completed')
+                  const Text(
+                    'Training completed. Pi checkpoint receipt is shown separately above.',
+                  ),
+              ] else
+                const Text('Waiting for fresh laptop training status.'),
+              if (canManage) ...[
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed:
+                      !ready ||
+                          provider.federatedTrainingStarting ||
+                          CloudApiService.commandUnconfirmed
+                      ? null
+                      : provider.startFederatedTraining,
+                  icon: const Icon(Icons.sync_rounded),
+                  label: Text(
+                    provider.federatedTrainingStarting
+                        ? 'Starting federated training…'
+                        : running
+                        ? 'Training in progress'
+                        : 'Update global model',
+                  ),
+                ),
+                if (CloudApiService.lastSnapshot?['training_available'] != true)
+                  const Text('Remote training awaits the Pi rollout.'),
+                if (CloudApiService.commandUnconfirmed) ...[
+                  const Text(
+                    'Previous command outcome is unconfirmed. Check it before starting another run.',
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        final result = await provider.checkCommandStatus();
+                        if (!mounted) return;
+                        setState(() {});
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Command: ${result["status"]}. Training completion is reported separately.',
+                            ),
+                          ),
+                        );
+                      } catch (error) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text('$error')));
+                      }
+                    },
+                    child: const Text('Check command status'),
+                  ),
+                ],
+              ] else
+                const Text(
+                  'Only household owners and admins can update the global model.',
+                ),
+              if (provider.federatedTrainingMessage != null)
+                Text(provider.federatedTrainingMessage!),
             ],
           ),
         ),

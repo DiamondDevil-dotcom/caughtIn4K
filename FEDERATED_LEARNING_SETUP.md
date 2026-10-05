@@ -22,7 +22,7 @@ automatically; **Your home / Manage homes** allows selecting or adding homes.
 Building locally does not deploy the customer app, website, backend, or Pi
 worker. Use the following deliberate rollout for a new installation or update:
 
-1. Apply schema version **6** with the private `cloud_database.py init` command
+1. Apply schema version **7** with the private `cloud_database.py init` command
    below, then run `cloud_database.py check`. This is additive: accounts,
    password hashes, memberships, gateways and Pi data are retained. Existing
    accounts are **not** falsely marked email-verified; they confirm their email
@@ -223,6 +223,39 @@ denied access; assigning the same Pi to two independent homes is not an
 isolation test.
 
 ## Earlier foundation and legacy gateway procedures
+
+### Restoring the customer app's real federated model update
+
+The cloud Home screen has an owner/admin **Update global model** action.
+It submits a gateway-scoped `train` command (no MAC, dataset, coordinator URL
+or arbitrary process arguments). The existing Pi control worker forwards it
+locally to the existing laptop Flower coordinator using the private gateway
+credential. Training remains the real laptop + Pi local-training/FedAvg flow.
+Cloud stores only bounded checkpoint/training metadata, never model weights,
+raw packets, training rows or laptop filesystem paths.
+
+Rollout requires additive schema **7**, updated Pi `router_ids_agent.py` and
+`cloud_control_agent.py`, and `GHOST_CLOUD_TRAINING_ENABLED=true` on both the
+Pi router service and customer backend. Update the Pi before enabling the
+backend flag, with router/control backups and Python syntax checks. Restart
+only the router and cloud-control services; keep existing credential settings.
+The uploader does not need a code update for this nested model metadata.
+The laptop coordinator must be running and reachable from the Pi, with the
+existing shared gateway credential and configured Flower address/port.
+
+Training startup acknowledgement is **not completion**. Home shows the real
+coordinator state and current/total rounds separately from the Pi checkpoint's
+FedAvg round. A coordinator outage disables startup without disabling threat
+monitoring. Status is collected in a background thread at most every 10 seconds
+so the two-second monitoring uploader is not blocked by laptop requests or
+checkpoint reads. Progress older than 30 seconds is not treated as current.
+The command queue never automatically redelivers a training start. Unknown
+outcomes require checking the command/status rather than blindly starting again.
+
+Verify owner/admin access, member read-only behavior and cross-household denial,
+then run one real training cycle and confirm both laptop/Pi participants, round
+progress, coordinator completion and the new Pi checkpoint. A passing button
+test alone is not proof of federated training.
 
 ### Consumer cloud foundation setup
 

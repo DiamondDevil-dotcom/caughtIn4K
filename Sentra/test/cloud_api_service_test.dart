@@ -208,6 +208,7 @@ void main() {
           request.headers['X-Cloud-Staging-Token'],
           'test-private-staging-token-32-characters',
         );
+
         expect(request.headers.containsKey('X-Gateway-Token'), isFalse);
         expect(request.headers.containsKey('X-Gateway-Credential'), isFalse);
         expect(request.followRedirects, isFalse);
@@ -236,6 +237,133 @@ void main() {
         expect(CloudApiService.enabled, isFalse);
         expect(RouterApiService.hasSession, isFalse);
       }, () => client);
+    },
+  );
+
+  test(
+    'training targets the gateway and waits for real startup acknowledgement',
+    () async {
+      select();
+      String? id;
+      var reads = 0;
+      await http.runWithClient(
+        () async {
+          final result = await CloudApiService.control(
+            null,
+            'train',
+            pollInterval: Duration.zero,
+          );
+          expect(result['success'], isTrue);
+          expect(
+            result['message'],
+            contains('Completion is reported separately'),
+          );
+          expect(CloudApiService.commandUnconfirmed, isFalse);
+          expect(reads, 2);
+        },
+        () => MockClient((request) async {
+          if (request.url.path.endsWith('/snapshot')) {
+            return http.Response(
+              jsonEncode({
+                ...snapshot(),
+                'training_available': true,
+                'model': {
+                  'available': true,
+                  'federated': {
+                    'observed_at': DateTime.now().toUtc().toIso8601String(),
+                    'status': 'pretrained',
+                    'training': {
+                      'state': 'idle',
+                      'current_round': 0,
+                      'total_rounds': 10,
+                    },
+                  },
+                },
+              }),
+              200,
+            );
+          }
+          if (request.method == 'POST') {
+            final body = jsonDecode(request.body) as Map;
+            expect(body['action'], 'train');
+            expect(body['mac'], isNull);
+            expect(body.containsKey('server_address'), isFalse);
+            id = body['command_id'] as String;
+            return http.Response(
+              jsonEncode({
+                'id': id,
+                'gateway_id': 'gateway-a',
+                'mac': null,
+                'action': 'train',
+                'status': 'queued',
+              }),
+              202,
+            );
+          }
+          reads++;
+          return http.Response(
+            jsonEncode({
+              'id': id,
+              'gateway_id': 'gateway-a',
+              'status': reads == 1 ? 'delivered' : 'succeeded',
+              'result_code': reads == 1 ? null : 'applied',
+            }),
+            200,
+          );
+        }),
+      );
+    },
+  );
+
+  test(
+    'training cannot bypass role rollout freshness or running checks',
+    () async {
+      for (final state in [
+        'running',
+        'unavailable',
+        'stale',
+        'rollout',
+        'member',
+      ]) {
+        select(role: state == 'member' ? 'member' : 'owner');
+        var posts = 0;
+        await http.runWithClient(
+          () async {
+            await expectLater(
+              CloudApiService.control(null, 'train'),
+              throwsException,
+            );
+            expect(posts, 0);
+          },
+          () => MockClient((request) async {
+            if (request.method == 'POST') posts++;
+            return http.Response(
+              jsonEncode({
+                ...snapshot(),
+                'training_available': state != 'rollout',
+                'model': {
+                  'available': true,
+                  'federated': {
+                    'observed_at': DateTime.now()
+                        .subtract(Duration(seconds: state == 'stale' ? 31 : 0))
+                        .toUtc()
+                        .toIso8601String(),
+                    'status': 'pretrained',
+                    'training': {
+                      'state': {'running', 'unavailable'}.contains(state)
+                          ? state
+                          : 'idle',
+                      'current_round': 0,
+                      'total_rounds': 10,
+                    },
+                  },
+                },
+              }),
+              200,
+            );
+          }),
+        );
+      }
     },
   );
 

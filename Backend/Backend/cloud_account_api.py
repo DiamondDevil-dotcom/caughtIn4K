@@ -190,7 +190,11 @@ def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
     @router.get("/households/{household_id}/gateways/{gateway_id}/snapshot")
     async def snapshot(household_id: UUID, gateway_id: UUID, account=Depends(current_account)):
         result = await operation(monitoring.read_snapshot, account["id"], household_id, gateway_id)
-        return {**result, "device_management_available": os.getenv("GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED", "").lower() == "true"}
+        return {
+            **result,
+            "device_management_available": os.getenv("GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED", "").lower() == "true",
+            "training_available": os.getenv("GHOST_CLOUD_TRAINING_ENABLED", "").lower() == "true",
+        }
 
     @router.post("/households/{household_id}/gateways/{gateway_id}/commands", status_code=202)
     async def create_command(

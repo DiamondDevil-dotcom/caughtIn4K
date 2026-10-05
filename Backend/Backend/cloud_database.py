@@ -22,6 +22,7 @@ MIGRATIONS = (
     (4, MIGRATION_DIR / "004_customer_accounts.sql"),
     (5, MIGRATION_DIR / "005_device_management.sql"),
     (6, MIGRATION_DIR / "006_push_notifications.sql"),
+    (7, MIGRATION_DIR / "007_federated_training.sql"),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

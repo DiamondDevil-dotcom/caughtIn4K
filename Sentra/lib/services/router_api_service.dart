@@ -119,7 +119,7 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> startFederatedTraining() async {
-    _requireLive('Federated training controls');
+    if (cloudMode) return CloudApiService.control(null, 'train');
     final response = await http
         .post(
           Uri.parse("$baseUrl/federated/start"),

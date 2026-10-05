@@ -17,13 +17,15 @@ from cloud_gateways import secret_hash
 class CommandInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command_id: UUID
-    action: Literal["block", "unblock", "register", "remove"]
-    mac: str = Field(pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+    action: Literal["block", "unblock", "register", "remove", "train"]
+    mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
     device_name: str | None = Field(default=None, min_length=1, max_length=200)
     ip_address: str | None = Field(default=None, max_length=15)
 
     @model_validator(mode="after")
     def device_details(self):
+        if (self.action == "train") != (self.mac is None):
+            raise ValueError("Training targets the gateway; device actions require a MAC address.")
         if self.action == "register":
             if not self.device_name or self.device_name != self.device_name.strip() or self.ip_address is None:
                 raise ValueError("Registration requires a device name and optional IPv4 address.")
@@ -86,6 +88,8 @@ def _machine_gateway(connection, gateway_id: UUID, credential: str):
 
 
 def create_command(account_id: UUID, home: UUID, gateway_id: UUID, payload: CommandInput) -> dict:
+    if payload.action == "train" and os.getenv("GHOST_CLOUD_TRAINING_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=503, detail="Remote training is awaiting the Pi update.")
     if payload.action in {"register", "remove"} and os.getenv("GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED", "").lower() != "true":
         raise HTTPException(status_code=503, detail="Remote device management is awaiting the Pi update.")
     with connect() as connection:
@@ -109,12 +113,12 @@ def create_command(account_id: UUID, home: UUID, gateway_id: UUID, payload: Comm
         ).fetchone()
         if active is not None:
             raise HTTPException(status_code=409, detail="Wait for the current gateway command to finish.")
-        device = connection.execute(
+        device = None if payload.action == "train" else connection.execute(
             "SELECT 1 FROM caughtin4k.gateway_snapshots "
             "WHERE gateway_id = %s AND devices @> %s::jsonb",
             (gateway_id, '[{"mac":"' + payload.mac + '"}]'),
         ).fetchone()
-        if payload.action != "register" and device is None:
+        if payload.action not in {"register", "train"} and device is None:
             raise HTTPException(status_code=404, detail="Device not found in this gateway snapshot.")
         inserted = connection.execute(
             "INSERT INTO caughtin4k.gateway_commands (id, gateway_id, created_by, action, mac, device_name, ip_address) "

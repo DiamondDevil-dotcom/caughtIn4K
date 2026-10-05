@@ -78,6 +78,28 @@ class ControlAgentTests(unittest.TestCase):
             agent.ControlWorker(self.config, MagicMock()).poll()
         self.assertEqual(request.call_count, 1)
 
+    def test_training_ack_retry_does_not_start_second_run(self):
+        command = {**self.command, "action": "train", "mac": None}
+        self.assertEqual(agent.validate_command(command), command)
+        with self.assertRaises(PermanentUploadError):
+            agent.validate_command({**command, "mac": self.command["mac"]})
+        worker = agent.ControlWorker(self.config, MagicMock())
+        with patch.object(agent, "endpoint_json", side_effect=[
+            {"command": command}, self.result, UploadError("offline"), {"success": True},
+        ]) as request:
+            with self.assertRaises(UploadError):
+                worker.poll()
+            worker.poll()
+        self.assertEqual([call.args[1].method for call in request.call_args_list], ["POST", "POST", "PUT", "PUT"])
+
+    def test_coordinator_lost_start_response_remains_unconfirmed(self):
+        command = {**self.command, "action": "train", "mac": None}
+        with patch.object(agent, "endpoint_json", return_value={
+            "success": False, "result_code": "local_unreachable",
+        }):
+            self.assertEqual(agent.apply_local(self.config, MagicMock(), command),
+                {"success": False, "result_code": "local_unreachable"})
+
     def test_device_management_is_bounded_and_acknowledged_without_replay(self):
         for action in ("register", "remove"):
             command = {**self.command, "action": action}

@@ -112,6 +112,7 @@ void main() {
         find.text('Recent WARNING detected on this device (last 60 seconds).'),
         findsNWidgets(2),
       );
+
       expect(find.text('BLOCKED'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Unblock'), findsOneWidget);
       await mount(tester, 'owner', screen: const HomeScreen());
@@ -125,6 +126,70 @@ void main() {
       await tester.pump();
       expect(router.recentWarnings, isEmpty);
       expect(find.textContaining('Recent WARNING:'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'cloud FL button and progress are restored for owner, member read-only',
+    (tester) async {
+      router.federatedStatus = {
+        'cloud_model': {
+          'available': true,
+          'federated': {
+            'observed_at': DateTime.now().toUtc().toIso8601String(),
+            'status': 'federated',
+            'federated_round': 4,
+            'training': {
+              'state': 'idle',
+              'current_round': 0,
+              'total_rounds': 10,
+            },
+          },
+        },
+      };
+      await mount(tester, 'owner', screen: const HomeScreen());
+      CloudApiService.lastSnapshot!['training_available'] = true;
+      router.notifyListeners();
+      await tester.pump();
+      await tester.scrollUntilVisible(find.text('Update global model'), 300);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Update global model'),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        find.text('Pi checkpoint: FedAvg global model, round 4.'),
+        findsOneWidget,
+      );
+      final federated =
+          (router.federatedStatus!['cloud_model'] as Map)['federated'] as Map;
+      federated['training'] = {
+        'state': 'running',
+        'current_round': 5,
+        'total_rounds': 10,
+      };
+      router.notifyListeners();
+      await tester.pump();
+      expect(find.text('Training: running · round 5/10'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Training in progress'),
+            )
+            .onPressed,
+        isNull,
+      );
+      await mount(tester, 'member', screen: const HomeScreen());
+      expect(find.text('Update global model'), findsNothing);
+      expect(
+        find.text(
+          'Only household owners and admins can update the global model.',
+        ),
+        findsOneWidget,
+      );
     },
   );
 

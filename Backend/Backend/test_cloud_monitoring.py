@@ -32,6 +32,20 @@ class MonitoringTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValidationError):
                 monitoring.MonitoringSnapshot(**{**self.payload, field: []})
 
+    def test_federated_progress_is_bounded_metadata_not_weights_or_training_rows(self):
+        value = {
+            "observed_at": datetime.now(timezone.utc),
+            "status": "federated", "federated_round": 4,
+            "training": {"state": "running", "current_round": 5, "total_rounds": 10},
+        }
+        model = monitoring.ModelMetadata(available=True, federated=value)
+        self.assertEqual(model.federated.training.current_round, 5)
+        for extra in ("weights", "training_rows", "coordinator_url"):
+            with self.assertRaises(ValidationError):
+                monitoring.FederatedMetadata(**{**value, extra: []})
+        with self.assertRaises(ValidationError):
+            monitoring.TrainingMetadata(state="fake", current_round=0, total_rounds=10)
+
     def test_future_and_naive_observation_times_rejected(self):
         for time in (datetime.now(), datetime.now(timezone.utc) + timedelta(minutes=5)):
             with self.assertRaises(ValidationError):

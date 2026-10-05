@@ -211,22 +211,29 @@ class RouterDeviceProvider extends ChangeNotifier {
 
   Future<void> startFederatedTraining() async {
     if (federatedTrainingStarting) return;
+    final session = RouterApiService.sessionGeneration;
     federatedTrainingStarting = true;
     federatedTrainingMessage = null;
     notifyListeners();
     try {
       final result = await RouterApiService.startFederatedTraining();
+      if (_disposed || session != RouterApiService.sessionGeneration) return;
       federatedTrainingMessage =
           result["message"] as String? ?? "Federated training started.";
-      await _fetchFederatedStatus();
+      if (RouterApiService.cloudMode) {
+        await _fetch();
+      } else {
+        await _fetchFederatedStatus();
+      }
     } catch (error) {
+      if (_disposed || session != RouterApiService.sessionGeneration) return;
       federatedTrainingMessage = error.toString().replaceFirst(
         RegExp(r'^Exception:\s*'),
         '',
       );
     } finally {
       federatedTrainingStarting = false;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
   }
 

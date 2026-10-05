@@ -610,6 +610,69 @@ class FederatedStartClientPayload(BaseModel):
 
 
 _model_holder: dict[str, object] = {}
+_cloud_federated_lock = threading.Lock()
+_cloud_federated_status = None
+_cloud_federated_checked = 0.0
+_cloud_federated_fetching = False
+
+
+def _refresh_cloud_federated_status():
+    global _cloud_federated_status, _cloud_federated_checked, _cloud_federated_fetching
+    value = None
+    try:
+        result = federated_status()
+        training = result["training"]
+        state = training.get("state", "unavailable")
+        if state not in {"idle", "running", "completed", "failed", "unavailable"}:
+            raise ValueError("Coordinator returned an unsupported training state.")
+        current = training.get("current_round", 0)
+        total = training.get("total_rounds", 10)
+        round_number = result.get("federated_round")
+        if (type(current) is not int or not 0 <= current <= 10000
+                or type(total) is not int or not 1 <= total <= 10000
+                or (round_number is not None and (type(round_number) is not int or not 0 <= round_number <= 10000))):
+            raise ValueError("Coordinator returned invalid round progress.")
+        value = {
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "status": result["status"],
+            "federated_round": round_number,
+            "training": {
+                "state": state, "current_round": current, "total_rounds": total,
+                "error": (
+                    "Laptop coordinator unavailable. Pi threat detection continues."
+                    if state == "unavailable" else
+                    "Federated training failed. Check the laptop training log."
+                    if state == "failed" else None
+                ),
+            },
+        }
+    except (HTTPException, OSError, ValueError, KeyError, TypeError) as error:
+        print(f"[cloud federated status] {type(error).__name__}: status unavailable", flush=True)
+        value = {
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "status": "unavailable", "federated_round": None,
+            "training": {
+                "state": "unavailable", "current_round": 0, "total_rounds": 10,
+                "error": "Federated status unavailable. Pi threat detection continues.",
+            },
+        }
+    finally:
+        with _cloud_federated_lock:
+            if value is not None:
+                _cloud_federated_status = value
+                _cloud_federated_checked = time.monotonic()
+            _cloud_federated_fetching = False
+
+
+def cloud_federated_metadata():
+    global _cloud_federated_fetching
+    if os.getenv("GHOST_CLOUD_TRAINING_ENABLED", "false").lower() != "true":
+        return None
+    with _cloud_federated_lock:
+        if not _cloud_federated_fetching and time.monotonic() - _cloud_federated_checked >= 10:
+            _cloud_federated_fetching = True
+            threading.Thread(target=_refresh_cloud_federated_status, daemon=True).start()
+        return _cloud_federated_status
 
 
 @app.get("/cloud-agent/snapshot")
@@ -649,6 +712,9 @@ def cloud_agent_snapshot():
                 datetime.fromtimestamp(model_mtime, timezone.utc).isoformat()
                 if model_available and model_mtime is not None else None
             ),
+            **({"federated": cloud_federated_metadata()} if os.getenv(
+                "GHOST_CLOUD_TRAINING_ENABLED", "false"
+            ).lower() == "true" else {}),
         },
     }
 
@@ -738,6 +804,10 @@ def federated_status():
 @app.post("/federated/start")
 def start_federated_training_from_pi(request: Request):
     require_household_admin(request)
+    return request_federated_training()
+
+
+def request_federated_training():
     try:
         with urllib.request.urlopen(
             urllib.request.Request(
@@ -750,10 +820,15 @@ def start_federated_training_from_pi(request: Request):
             ),
             timeout=15,
         ) as response:
-            return json.loads(response.read().decode("utf-8"))
+            result = json.loads(response.read().decode("utf-8"))
+            if not isinstance(result, dict) or result.get("success") is not True:
+                raise HTTPException(status_code=502, detail="Laptop did not confirm training startup.")
+            return result
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise HTTPException(status_code=error.code, detail=detail) from error
+    except (ValueError, UnicodeError):
+        raise HTTPException(status_code=502, detail="Laptop returned an invalid training acknowledgement.") from None
     except (OSError, urllib.error.URLError) as error:
         raise HTTPException(status_code=502, detail=f"Laptop Flower coordinator unavailable: {error}") from error
 
@@ -1023,8 +1098,8 @@ def apply_device_control(mac: str, action: Literal["block", "unblock"]):
 class CloudControlPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command_id: UUID
-    action: Literal["block", "unblock", "register", "remove"]
-    mac: str = Field(pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+    action: Literal["block", "unblock", "register", "remove", "train"]
+    mac: str | None = Field(default=None, pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
     expires_at: datetime
     device_name: str | None = Field(default=None, min_length=1, max_length=200)
     ip_address: str | None = Field(default=None, max_length=15)
@@ -1038,6 +1113,21 @@ def cloud_device_control(payload: CloudControlPayload, request: Request):
         raise HTTPException(status_code=403, detail="Cloud controls require a loopback connection.")
     if payload.expires_at.tzinfo is None or payload.expires_at <= datetime.now(timezone.utc):
         return {"success": False, "result_code": "expired"}
+    if (payload.action == "train") != (payload.mac is None):
+        raise HTTPException(status_code=422, detail="Invalid gateway/device command target.")
+    if payload.action == "train":
+        if payload.device_name is not None or payload.ip_address is not None:
+            raise HTTPException(status_code=422, detail="Training cannot include device details.")
+        if os.getenv("GHOST_CLOUD_TRAINING_ENABLED", "false").lower() != "true":
+            raise HTTPException(status_code=404, detail="Cloud federated training is disabled.")
+        try:
+            request_federated_training()
+        except HTTPException as error:
+            if error.status_code == 502:
+                # A lost coordinator response may follow a successful start.
+                return {"success": False, "result_code": "local_unreachable"}
+            return {"success": False, "result_code": "local_rejected"}
+        return {"success": True, "result_code": "applied"}
     if payload.action in {"register", "remove"} and os.getenv(
         "GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED", "false"
     ).lower() != "true":

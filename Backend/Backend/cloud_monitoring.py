@@ -46,10 +46,34 @@ class AlertMetadata(Metadata):
         return value
 
 
+class TrainingMetadata(Metadata):
+    state: Literal["idle", "running", "completed", "failed", "unavailable"]
+    current_round: int = Field(ge=0, le=10000)
+    total_rounds: int = Field(ge=1, le=10000)
+    error: str | None = Field(default=None, max_length=300)
+
+
+class FederatedMetadata(Metadata):
+    observed_at: datetime
+    status: Literal["pretrained", "federated", "unavailable"]
+    federated_round: int | None = Field(default=None, ge=0, le=10000)
+    training: TrainingMetadata
+
+    @field_validator("observed_at")
+    @classmethod
+    def aware_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("Federated status timestamps must include a timezone.")
+        if value > datetime.now(timezone.utc) + timedelta(seconds=60):
+            raise ValueError("Federated status timestamp is too far in the future.")
+        return value
+
+
 class ModelMetadata(Metadata):
     available: bool
     checkpoint_name: str | None = Field(default=None, max_length=200)
     updated_at: datetime | None = None
+    federated: FederatedMetadata | None = None
 
     @field_validator("updated_at")
     @classmethod

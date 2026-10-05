@@ -302,15 +302,23 @@ class CloudApiService {
       if (pending is! Map<String, dynamic> ||
           pending['household_id'] != householdId ||
           pending['id'] is! String ||
-          pending['mac'] is! String ||
-          pending['action'] is! String ||
+          !{
+            'block',
+            'unblock',
+            'register',
+            'remove',
+            'train',
+          }.contains(pending['action']) ||
+          (pending['action'] == 'train'
+              ? pending['mac'] != null
+              : pending['mac'] is! String) ||
           pending['unconfirmed'] is! bool) {
         throw const FormatException(
           'Saved network command is invalid. Contact support before retrying.',
         );
       }
       lastCommandId = pending['id'] as String;
-      lastCommandMac = pending['mac'] as String;
+      lastCommandMac = pending['mac'] as String?;
       lastCommandAction = pending['action'] as String;
       commandUnconfirmed = pending['unconfirmed'] as bool;
     }
@@ -352,7 +360,7 @@ class CloudApiService {
   }
 
   static Future<Map<String, dynamic>> control(
-    String mac,
+    String? mac,
     String action, {
     Duration pollInterval = const Duration(seconds: 3),
     Duration wait = const Duration(seconds: 150),
@@ -369,11 +377,36 @@ class CloudApiService {
         'Only household owners and admins can control the network.',
       );
     }
-    if (!{'block', 'unblock', 'register', 'remove'}.contains(action) ||
-        !RegExp(r'^[0-9a-f]{2}(:[0-9a-f]{2}){5}$').hasMatch(mac)) {
+    if (!{'block', 'unblock', 'register', 'remove', 'train'}.contains(action) ||
+        (action == 'train'
+            ? mac != null
+            : mac == null ||
+                  !RegExp(r'^[0-9a-f]{2}(:[0-9a-f]{2}){5}$').hasMatch(mac))) {
       throw const FormatException('Invalid network control target.');
     }
     final fresh = await snapshot();
+    if (action == 'train') {
+      if (fresh['training_available'] != true) {
+        throw Exception(
+          'Federated training requires the Pi update. No command sent.',
+        );
+      }
+      final model = fresh['model'];
+      final federated = model is Map ? model['federated'] : null;
+      final training = federated is Map ? federated['training'] : null;
+      final checked = federated is Map
+          ? DateTime.tryParse(federated['observed_at'] as String? ?? '')
+          : null;
+      if (checked == null ||
+          DateTime.now().difference(checked).inSeconds > 30 ||
+          checked.isAfter(DateTime.now()) ||
+          training is! Map ||
+          !{'idle', 'completed', 'failed'}.contains(training['state'])) {
+        throw Exception(
+          'Laptop training status is unavailable, stale, or already running. No command sent.',
+        );
+      }
+    }
     if ({'register', 'remove'}.contains(action) &&
         fresh['device_management_available'] != true) {
       throw Exception(
@@ -442,6 +475,7 @@ class CloudApiService {
             'success': true,
             'command_id': id,
             'completed_at': result['completed_at'],
+            if (action == 'train') 'message': 'Laptop coordinator accepted real federated training. Completion is reported separately.',
           };
         }
         if (status != 'queued' && status != 'delivered') {

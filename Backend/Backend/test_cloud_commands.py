@@ -42,6 +42,50 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(self.db.execute.call_count, 1)
             self.assertEqual(self.db.execute.call_args.args[1], (self.gateway, self.home, self.account))
 
+    def test_training_is_gateway_scoped_flagged_and_does_not_require_fake_device(self):
+        payload = commands.CommandInput(command_id=self.command_id, action="train")
+        with patch.dict(os.environ, {"GHOST_CLOUD_TRAINING_ENABLED": "false"}):
+            with self.assertRaises(HTTPException) as error:
+                commands.create_command(self.account, self.home, self.gateway, payload)
+        self.assertEqual(error.exception.status_code, 503)
+        command = {**self.command, "action": "train", "mac": None}
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_TRAINING_ENABLED": "true"}),
+            patch.object(commands, "connect", side_effect=lambda: self.connection([
+                {"role": "owner"}, None, None, command,
+            ])),
+        ):
+            result = commands.create_command(self.account, self.home, self.gateway, payload)
+        self.assertEqual(result["status"], "queued")
+        self.assertFalse(any("devices @>" in call.args[0] for call in self.db.execute.call_args_list))
+        self.assertIsNone(self.db.execute.call_args.args[1][4])
+        for change in (
+            {"mac": self.payload.mac}, {"device_name": "Sensor"}, {"ip_address": ""},
+        ):
+            with self.assertRaises(ValidationError):
+                commands.CommandInput(command_id=self.command_id, action="train", **change)
+        with self.assertRaises(ValidationError):
+            commands.CommandInput(command_id=self.command_id, action="block")
+
+    def test_training_preserves_household_roles_and_no_redelivery(self):
+        payload = commands.CommandInput(command_id=self.command_id, action="train")
+        for member, status in ((None, 404), ({"role": "member"}, 403)):
+            with (
+                patch.dict(os.environ, {"GHOST_CLOUD_TRAINING_ENABLED": "true"}),
+                patch.object(commands, "connect", side_effect=lambda: self.connection([member])),
+            ):
+                with self.assertRaises(HTTPException) as error:
+                    commands.create_command(self.account, self.home, self.gateway, payload)
+                self.assertEqual(error.exception.status_code, status)
+        with patch.object(commands, "connect", side_effect=lambda: self.connection([
+            {"household_id": self.home}, {**self.command, "action": "train", "mac": None},
+            {"role": "admin"}, {"id": self.command_id},
+        ])):
+            result = commands.take_command(self.gateway, self.credential)
+        self.assertEqual(result["command"]["action"], "train")
+        self.assertIsNone(result["command"]["mac"])
+        self.assertIn("status = 'queued'", self.db.execute.call_args_list[2].args[0])
+
     def test_registration_accepts_new_device_only_after_explicit_pi_rollout(self):
         payload = commands.CommandInput(command_id=self.command_id, action="register",
             mac=self.payload.mac, device_name="New sensor", ip_address="")
