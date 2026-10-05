@@ -14,6 +14,7 @@ import cloud_accounts as accounts
 import cloud_gateways as gateways
 import cloud_households as households
 import cloud_monitoring as monitoring
+import cloud_commands as commands
 from cloud_database import check_schema, connect, read_database_url
 
 
@@ -50,7 +51,10 @@ class CloudIntegrationTests(unittest.TestCase):
             home_a, home_b = UUID(a["household_id"]), UUID(b["household_id"])
             self.assertNotEqual(home_a, home_b)
             snapshot = monitoring.MonitoringSnapshot(
-                observed_at=datetime.now(timezone.utc), devices=[], alerts=[],
+                observed_at=datetime.now(timezone.utc), devices=[monitoring.DeviceMetadata(
+                    mac="aa:bb:cc:dd:ee:ff", name="Integration test device",
+                    status="SAFE", attack_probability=0, blocked=False,
+                )], alerts=[],
                 model=monitoring.ModelMetadata(available=False),
             )
             with self.assertRaises(HTTPException) as caught:
@@ -62,7 +66,7 @@ class CloudIntegrationTests(unittest.TestCase):
             self.assertFalse(replayed["snapshot_updated"])
             saved = monitoring.read_snapshot(account_ids[0], home_a, gateway_ids[0])
             self.assertTrue(saved["snapshot_available"])
-            self.assertEqual(saved["devices"], [])
+            self.assertEqual(len(saved["devices"]), 1)
             with self.assertRaises(HTTPException) as caught:
                 monitoring.read_snapshot(account_ids[1], home_a, gateway_ids[0])
             self.assertEqual(caught.exception.status_code, 404)
@@ -98,6 +102,46 @@ class CloudIntegrationTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 households.create_invite(account_ids[1], home_a, "blocked@example.invalid", "member")
             self.assertEqual(caught.exception.status_code, 403)
+            payload = commands.CommandInput(command_id=uuid4(), action="block", mac="aa:bb:cc:dd:ee:ff")
+            for account_id, home, status in (
+                (account_ids[1], home_a, 403), (account_ids[0], home_b, 404),
+            ):
+                with self.assertRaises(HTTPException) as caught:
+                    commands.create_command(account_id, home, gateway_ids[0], payload)
+                self.assertEqual(caught.exception.status_code, status)
+            queued = commands.create_command(account_ids[0], home_a, gateway_ids[0], payload)
+            self.assertEqual(queued["status"], "queued")
+            self.assertEqual(commands.create_command(
+                account_ids[0], home_a, gateway_ids[0], payload,
+            )["id"], payload.command_id)
+            with self.assertRaises(HTTPException) as caught:
+                commands.take_command(gateway_ids[0], second["gateway_credential"])
+            self.assertEqual(caught.exception.status_code, 401)
+
+            def take(_):
+                return commands.take_command(gateway_ids[0], first["gateway_credential"])["command"]
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                deliveries = list(pool.map(take, range(2)))
+            self.assertEqual(sum(item is not None for item in deliveries), 1)
+            self.assertEqual(commands.complete_command(
+                gateway_ids[0], first["gateway_credential"], payload.command_id,
+                commands.CommandResult(success=True, result_code="applied"),
+            )["status"], "succeeded")
+            self.assertEqual(commands.read_command(
+                account_ids[0], home_a, gateway_ids[0], payload.command_id,
+            )["status"], "succeeded")
+            expiring = commands.CommandInput(command_id=uuid4(), action="unblock", mac=payload.mac)
+            commands.create_command(account_ids[0], home_a, gateway_ids[0], expiring)
+            with connect() as connection:
+                connection.execute(
+                    "UPDATE caughtin4k.gateway_commands SET expires_at = now() - interval '1 second' "
+                    "WHERE id = %s", (expiring.command_id,),
+                )
+            self.assertIsNone(commands.take_command(gateway_ids[0], first["gateway_credential"])["command"])
+            self.assertEqual(commands.read_command(
+                account_ids[0], home_a, gateway_ids[0], expiring.command_id,
+            )["status"], "expired")
             token_secret = secrets.token_urlsafe(32)
             token = accounts.issue_token(account, token_secret)
             self.assertEqual(accounts.authenticate("Bearer " + token, token_secret)["id"], account["id"])

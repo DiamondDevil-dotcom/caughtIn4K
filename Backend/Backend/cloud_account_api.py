@@ -15,6 +15,7 @@ import cloud_accounts as accounts
 import cloud_gateways as gateways
 import cloud_households as households
 import cloud_monitoring as monitoring
+import cloud_commands as commands
 from cloud_database import CloudDatabaseError
 
 logger = logging.getLogger(__name__)
@@ -131,5 +132,32 @@ def build_router(secret: str) -> APIRouter:
     @router.get("/households/{household_id}/gateways/{gateway_id}/snapshot")
     async def snapshot(household_id: UUID, gateway_id: UUID, account=Depends(current_account)):
         return await operation(monitoring.read_snapshot, account["id"], household_id, gateway_id)
+
+    @router.post("/households/{household_id}/gateways/{gateway_id}/commands", status_code=202)
+    async def create_command(
+        household_id: UUID, gateway_id: UUID, payload: commands.CommandInput,
+        account=Depends(current_account),
+    ):
+        return await operation(commands.create_command, account["id"], household_id, gateway_id, payload)
+
+    @router.get("/households/{household_id}/gateways/{gateway_id}/commands/{command_id}")
+    async def command_status(
+        household_id: UUID, gateway_id: UUID, command_id: UUID, account=Depends(current_account),
+    ):
+        return await operation(commands.read_command, account["id"], household_id, gateway_id, command_id)
+
+    @router.post("/gateways/{gateway_id}/commands/next")
+    async def next_command(
+        gateway_id: UUID,
+        credential: str = Header(default="", alias="X-Gateway-Credential", max_length=256),
+    ):
+        return await operation(commands.take_command, gateway_id, credential)
+
+    @router.put("/gateways/{gateway_id}/commands/{command_id}/result")
+    async def command_result(
+        gateway_id: UUID, command_id: UUID, payload: commands.CommandResult,
+        credential: str = Header(default="", alias="X-Gateway-Credential", max_length=256),
+    ):
+        return await operation(commands.complete_command, gateway_id, credential, command_id, payload)
 
     return router

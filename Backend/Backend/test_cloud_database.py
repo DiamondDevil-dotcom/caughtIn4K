@@ -76,7 +76,7 @@ class CloudDatabaseTests(unittest.TestCase):
         queries = [call.args[0] for call in self.connection.execute.call_args_list]
         self.assertFalse(any("CREATE TABLE caughtin4k.accounts" in query for query in queries))
         self.assertTrue(any("CREATE TABLE caughtin4k.gateway_snapshots" in query for query in queries))
-        self.assertEqual(self.connection.execute.call_args.args[1], (2,))
+        self.assertEqual(self.connection.execute.call_args.args[1], (cloud.SCHEMA_VERSION,))
     def test_check_requires_applied_migration(self):
         with patch.object(cloud, "connect", side_effect=lambda url: self.fake_connection([])):
             with self.assertRaises(cloud.CloudDatabaseError):

@@ -24,6 +24,8 @@ import threading
 import time
 from datetime import datetime, timezone
 from contextvars import ContextVar
+from typing import Literal
+from uuid import UUID
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
@@ -35,7 +37,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from scapy.all import ARP, Ether, ICMP, TCP, Raw, sniff
 
 import network_control
@@ -507,7 +509,7 @@ PUBLIC_WITHOUT_HOUSEHOLD = {
     "/gateway/claim",
 }
 COORDINATOR_ROUTES = {"/federated/start-client", "/federated/stop-client"}
-PRIVATE_AGENT_ROUTES = {"/cloud-agent/snapshot"}
+PRIVATE_AGENT_ROUTES = {"/cloud-agent/snapshot", "/cloud-agent/control"}
 
 
 @app.middleware("http")
@@ -973,20 +975,59 @@ def reset_password(payload: PasswordResetPayload):
 
 @app.post("/devices/{mac}/block")
 def force_block(mac: str, request: Request):
-    if is_excluded_device(mac):
-        raise HTTPException(status_code=400, detail="The federated-learning server cannot be blocked as an IoT device.")
     if getattr(request.state, "household_role", None) not in {"owner", "admin", "member"}:
         raise HTTPException(status_code=403, detail="Household access is required.")
+    return apply_device_control(mac, "block")
+
+
+_device_control_lock = threading.Lock()
+
+
+def apply_device_control(mac: str, action: Literal["block", "unblock"]):
+    mac = mac.lower()
+    if is_excluded_device(mac):
+        raise HTTPException(status_code=400, detail="The federated-learning server is not managed as an IoT device.")
     _ensure_household_device(mac)
-    state = registry.find(mac.lower())
-    target_ip = state.ip_address if state is not None else None
-    success, detail = network_control.block_mac(mac, target_ip=target_ip)
-    if state is not None:
-        state.blocked = success
-        state.status = "BLOCKED" if success else state.status
-        storage.upsert_device(state)
-        storage.log_event(state)
+    with _device_control_lock:
+        state = registry.find(mac)
+        if action == "block":
+            target_ip = state.ip_address if state is not None else None
+            success, detail = network_control.block_mac(mac, target_ip=target_ip)
+        else:
+            success, detail = network_control.unblock_mac(mac)
+        if state is not None and success:
+            state.blocked = action == "block"
+            state.status = "BLOCKED" if state.blocked else "SAFE"
+            if action == "unblock":
+                state.consecutive_attack_windows = 0
+            storage.upsert_device(state)
+            storage.log_event(state)
     return {"mac": mac, "success": success, "detail": detail}
+
+
+class CloudControlPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    command_id: UUID
+    action: Literal["block", "unblock"]
+    mac: str = Field(pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+    expires_at: datetime
+
+
+@app.post("/cloud-agent/control")
+def cloud_device_control(payload: CloudControlPayload, request: Request):
+    if os.getenv("GHOST_CLOUD_CONTROL_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="Cloud controls are disabled.")
+    if request.client is None or request.client.host != "127.0.0.1":
+        raise HTTPException(status_code=403, detail="Cloud controls require a loopback connection.")
+    if payload.expires_at.tzinfo is None or payload.expires_at <= datetime.now(timezone.utc):
+        return {"success": False, "result_code": "expired"}
+    result = apply_device_control(payload.mac, payload.action)
+    if not result["success"]:
+        print(f"[cloud-control] Network enforcement failed: {result['detail']}", flush=True)
+    return {
+        "success": result["success"],
+        "result_code": "applied" if result["success"] else "enforcement_failed",
+    }
 
 
 @app.post("/wifi/connect")
@@ -1008,20 +1049,9 @@ def wifi_status(request: Request):
 
 @app.post("/devices/{mac}/unblock")
 def force_unblock(mac: str, request: Request):
-    if is_excluded_device(mac):
-        raise HTTPException(status_code=400, detail="The federated-learning server is not managed as an IoT device.")
     if getattr(request.state, "household_role", None) not in {"owner", "admin", "member"}:
         raise HTTPException(status_code=403, detail="Household access is required.")
-    _ensure_household_device(mac)
-    success, detail = network_control.unblock_mac(mac)
-    state = registry.find(mac.lower())
-    if state is not None and success:
-        state.blocked = False
-        state.consecutive_attack_windows = 0
-        state.status = "SAFE"
-        storage.upsert_device(state)
-        storage.log_event(state)
-    return {"mac": mac, "success": success, "detail": detail}
+    return apply_device_control(mac, "unblock")
 
 
 @app.post("/telemetry")

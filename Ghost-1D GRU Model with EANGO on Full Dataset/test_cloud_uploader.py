@@ -1,6 +1,8 @@
 import json
+import io
 import unittest
 import urllib.error
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -37,6 +39,33 @@ class UploaderTests(unittest.TestCase):
                 uploader.upload_once(self.config, MagicMock())
         self.assertEqual(request.call_count, 1)
 
+    def test_staging_token_goes_to_cloud_only(self):
+        token = "test-private-staging-token-at-least-32"
+        with patch.object(uploader, "request_json", side_effect=[
+            self.snapshot, {"success": True, "snapshot_updated": True},
+        ]) as request:
+            uploader.upload_once(replace(self.config, staging_token=token), MagicMock())
+        local, cloud = [call.args[1] for call in request.call_args_list]
+        self.assertIsNone(local.get_header("X-cloud-staging-token"))
+        self.assertEqual(cloud.get_header("X-cloud-staging-token"), token)
+
+    def test_upload_error_identifies_local_or_cloud_stage(self):
+        for responses, stage in (
+            ([uploader.PermanentUploadError("HTTP 401")], "Local Pi snapshot"),
+            ([self.snapshot, uploader.PermanentUploadError("HTTP 401")], "Cloud staging upload"),
+            ([self.snapshot, uploader.UploadError("offline")], "Cloud staging upload"),
+        ):
+            with patch.object(uploader, "request_json", side_effect=responses):
+                with self.assertRaises(uploader.UploadError) as caught:
+                    uploader.upload_once(self.config, MagicMock())
+            self.assertIn(stage, str(caught.exception))
+            self.assertNotIn(self.config.credential, str(caught.exception))
+
+    def test_invalid_staging_token_rejected(self):
+        for token in ("short", "x" * 32 + "\n", "x" * 257):
+            with self.assertRaises(ValueError):
+                replace(self.config, staging_token=token)
+
     def test_success_requires_explicit_cloud_acknowledgement(self):
         for response in ({}, {"success": False}, {"success": True, "snapshot_updated": 1}):
             with patch.object(uploader, "request_json", side_effect=[self.snapshot, response]):
@@ -70,6 +99,22 @@ class UploaderTests(unittest.TestCase):
         with patch.object(uploader.random, "uniform", return_value=0):
             self.assertEqual(uploader.retry_delay(2, 30), 60)
             self.assertEqual(uploader.retry_delay(1000, 30), 300)
+
+    def test_401_diagnostics_only_expose_allowlisted_reason(self):
+        for detail, expected in (
+            ("Private cloud staging access required.", "Staging access token rejected"),
+            ("Gateway credential is invalid.", "Gateway machine credential rejected"),
+            ("private-secret-diagnostic", "HTTP 401; check configuration"),
+        ):
+            opener = MagicMock()
+            opener.open.side_effect = urllib.error.HTTPError(
+                "https://cloud.example", 401, "", {},
+                io.BytesIO(json.dumps({"detail": detail}).encode()),
+            )
+            with self.assertRaises(uploader.PermanentUploadError) as caught:
+                uploader.request_json(opener, MagicMock())
+            self.assertIn(expected, str(caught.exception))
+            self.assertNotIn("private-secret-diagnostic", str(caught.exception))
 
     def test_https_cloud_and_loopback_source_required(self):
         for cloud, local in (

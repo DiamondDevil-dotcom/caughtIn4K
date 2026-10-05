@@ -18,6 +18,7 @@ MIGRATION_DIR = Path(__file__).resolve().parent / "migrations"
 MIGRATIONS = (
     (1, MIGRATION_DIR / "001_cloud_foundation.sql"),
     (2, MIGRATION_DIR / "002_gateway_monitoring.sql"),
+    (3, MIGRATION_DIR / "003_gateway_commands.sql"),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

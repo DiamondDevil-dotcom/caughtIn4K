@@ -199,8 +199,60 @@ request must include it in `X-Cloud-Staging-Token` in addition to the user or
 machine credentials required by that route. Missing/invalid staging access
 fails closed before route execution. This operator-only gate is temporary and
 must not be embedded in a public app/website or treated as household authorization.
-The current uploader does not yet send the staging header. Do not install or
-enable it until the private staging test workflow is wired. Free-tier staging
+The uploader can send this header using the separate staging environment.
+After a successful one-shot upload, add `--require-snapshot` to
+`verify_cloud_staging.py` to check that the owner can read the stored metadata
+through the household-scoped endpoint. It reports only device/alert counts and
+freshness flags, not private device details. Stale data is expected when only a
+one-shot upload has run; this check does not enable continuous uploads.
+An uploader error prefixed `Local Pi snapshot` concerns the local export;
+`Cloud staging upload` concerns the cloud request. A rejected staging token
+must be corrected before the cloud can check the gateway machine credential.
+
+### Outbound network controls (staging rollout required)
+
+Schema migration 003 adds a private command queue. Apply it with the existing
+private database initialization CLI before using the new command endpoints.
+No existing accounts, memberships, snapshots, Pi datasets, or models are
+replaced. The new channel remains disabled on the Pi by default.
+
+- An authenticated household owner/admin submits a block/unblock command to
+  `POST /cloud/households/{household_id}/gateways/{gateway_id}/commands`,
+  using a client-generated UUID `command_id`, lowercase `mac`, and `action`.
+  Repeating the same ID and payload returns the original command; changing
+  its creator, gateway, or payload is rejected. Regular members can read
+  status but cannot submit network controls.
+- The cloud checks gateway membership, revocation, and snapshot device
+  presence. Only one queued/delivered command per gateway is allowed.
+  A queued command expires after 120 seconds rather than executing on a
+  device that reconnects much later.
+- The separate `cloud_control_agent.py` polls outbound every 10 seconds with
+  the gateway machine credential and, during private staging, the staging
+  token. Delivery rechecks the initiating account's owner/admin role.
+  This is independent of the 30-second metadata uploader and Flower.
+- The Pi endpoint `/cloud-agent/control` requires the local private router
+  token, a loopback connection, and `GHOST_CLOUD_CONTROL_ENABLED=true` in
+  the router process. Set the same flag for the separate worker service.
+  The worker is unprivileged; the existing router uses its existing
+  restricted firewall helper. No remote shell, IP, or executable is accepted.
+  Registered-device and excluded-coordinator checks still apply.
+- The existing AP/nftables enforcement is reused. Dry-run, unsupported
+  topology, missing helper permission, and failed enforcement do not count
+  as successful blocking. The Pi must be the device's actual network gateway;
+  receiving a cloud command alone cannot isolate a device on another router.
+- User clients poll the household-scoped command status endpoint.
+  `queued`/`delivered` are not success; `succeeded` means the Pi reported
+  enforcement. `expired` means not dispatched, `cancelled` means role no
+  longer permits execution, and `unknown` means execution is unconfirmed.
+  The worker retries a result acknowledgement, never the firewall operation.
+  Lost delivery responses or worker restarts can therefore leave an unknown
+  outcome; reconcile against a fresh snapshot before issuing a new command.
+
+The command channel is not deployed or enabled by source changes alone.
+Sentra/website integration and a controlled real-device block/unblock test
+are required before switching consumer clients away from the live gateway.
+Do not enable it until private configuration and loopback export are installed.
+Free-tier staging
 sleeping is not evidence of production availability.
 
 For the separate cloud staging service, use root `Backend/Backend`, build
@@ -212,6 +264,27 @@ exclude GPU/CUDA packages. The Pi and laptop continue using their existing
 requirements and entry points; real federated training is not removed.
 Staging requires the database URL, cloud session secret, and staging token.
 Its public health check proves process readiness, not database connectivity.
+
+Once deployed, run `verify_cloud_staging.py --url <staging-https-origin>
+--bundle <private-migration-folder>` locally. It prompts privately for the
+staging access token and existing owner credentials, then verifies cloud login,
+owner membership, and the imported gateway through HTTPS. It prints no tokens
+or account details, follows no redirects, and does not enable uploads or change
+Pi configuration. This verifies the imported owner only, not every consumer flow.
+The verifier first checks the private staging gate without submitting account
+credentials. Its errors distinguish a rejected staging token from rejected
+owner credentials. Pi password changes after import are not synchronized to
+the cloud snapshot; do not reset passwords blindly when diagnosing staging.
+
+`prepare_pi_staging.py --bundle <import-bundle> --url <staging-origin>
+--output <new-private-folder>` prompts for the staging token, validates matching
+gateway identifiers, and creates a separate protected `cloud-staging.env`.
+The imported bundle is not modified, uploads remain disabled, and the private
+router token is not copied. The staging token goes only to cloud requests,
+not loopback. The Pi will need the router and staging environment files loaded
+by a separate uploader service. `cloud_uploader.py --once` provides an explicit
+one-upload acknowledgement check. Do not remove Ngrok or switch consumer clients
+until real Pi uploads and household-scoped reads have been verified.
 
 Both Sentra and the website use `https://caughtin4k.onrender.com` as their one
 public gateway. Render proxies devices, event history, account operations,

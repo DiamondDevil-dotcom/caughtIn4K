@@ -1,8 +1,11 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -137,6 +140,85 @@ class PiAuthorizationTests(unittest.TestCase):
                 headers={"X-Gateway-Token": "private-gateway-test-token"},
             )
         self.assertEqual(response.status_code, 200)
+
+    def test_cloud_control_requires_explicit_flag_private_token_and_loopback(self):
+        payload = {
+            "command_id": str(uuid4()), "mac": "aa:bb:cc:dd:ee:ff", "action": "block",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat(),
+        }
+        client = TestClient(router.app, client=("127.0.0.1", 50000))
+        headers = {"X-Gateway-Token": "private-gateway-test-token"}
+        with patch.object(router, "apply_device_control") as apply:
+            self.assertEqual(client.post("/cloud-agent/control", json=payload).status_code, 401)
+            with patch.dict(os.environ, {"GHOST_CLOUD_CONTROL_ENABLED": "false"}):
+                self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).status_code, 404)
+            with patch.dict(os.environ, {"GHOST_CLOUD_CONTROL_ENABLED": "true"}):
+                self.assertEqual(self.client.post("/cloud-agent/control", json=payload, headers=headers).status_code, 403)
+            apply.assert_not_called()
+
+    def test_cloud_control_expired_invalid_and_unregistered_targets_never_block(self):
+        client = TestClient(router.app, client=("127.0.0.1", 50000))
+        headers = {"X-Gateway-Token": "private-gateway-test-token"}
+        payload = {
+            "command_id": str(uuid4()), "mac": "aa:bb:cc:dd:ee:ff", "action": "block",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat(),
+        }
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_CONTROL_ENABLED": "true"}),
+            patch.object(router.network_control, "block_mac") as block,
+        ):
+            result = client.post("/cloud-agent/control", json={
+                **payload, "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+            }, headers=headers)
+            self.assertEqual(result.json(), {"success": False, "result_code": "expired"})
+            self.assertEqual(client.post("/cloud-agent/control", json={
+                **payload, "action": "shell",
+            }, headers=headers).status_code, 422)
+            self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).status_code, 404)
+            block.assert_not_called()
+
+    def test_cloud_control_uses_real_enforcement_and_protects_coordinator(self):
+        client = TestClient(router.app, client=("127.0.0.1", 50000))
+        headers = {"X-Gateway-Token": "private-gateway-test-token"}
+        payload = {
+            "command_id": str(uuid4()), "mac": "aa:bb:cc:dd:ee:ff", "action": "block",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat(),
+        }
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_CONTROL_ENABLED": "true"}),
+            patch.object(router, "_ensure_household_device"),
+            patch.object(router.registry, "find", return_value=None),
+            patch.object(router, "is_excluded_device", return_value=False) as excluded,
+            patch.object(router.network_control, "block_mac", return_value=(True, "gateway_firewall_enforced")) as block,
+            patch.object(router.network_control, "unblock_mac", return_value=(True, "gateway_firewall_removed")) as unblock,
+        ):
+            self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).json(),
+                             {"success": True, "result_code": "applied"})
+            block.assert_called_once_with(payload["mac"], target_ip=None)
+            self.assertEqual(client.post("/cloud-agent/control", json={
+                **payload, "action": "unblock",
+            }, headers=headers).json(), {"success": True, "result_code": "applied"})
+            unblock.assert_called_once_with(payload["mac"])
+            block.return_value = (False, "dry_run_no_network_change")
+            self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).json(),
+                             {"success": False, "result_code": "enforcement_failed"})
+            excluded.return_value = True
+            self.assertEqual(client.post("/cloud-agent/control", json=payload, headers=headers).status_code, 400)
+            self.assertEqual(block.call_count, 2)
+
+    def test_failed_block_preserves_previously_blocked_state(self):
+        state = SimpleNamespace(blocked=True, status="BLOCKED", ip_address=None)
+        with (
+            patch.object(router, "_ensure_household_device"),
+            patch.object(router, "is_excluded_device", return_value=False),
+            patch.object(router.registry, "find", return_value=state),
+            patch.object(router.network_control, "block_mac", return_value=(False, "unavailable")),
+            patch.object(router.storage, "upsert_device") as store,
+        ):
+            self.assertFalse(router.apply_device_control("aa:bb:cc:dd:ee:ff", "block")["success"])
+        self.assertTrue(state.blocked)
+        self.assertEqual(state.status, "BLOCKED")
+        store.assert_not_called()
 
     def test_member_cannot_register_devices_or_start_training(self):
         ok, error, invite = router.storage.create_invite(
