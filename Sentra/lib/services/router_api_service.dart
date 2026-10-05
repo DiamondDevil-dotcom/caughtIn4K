@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'cloud_api_service.dart';
 
 /// Uses Render as the shared gateway to the Pi and laptop coordinator.
 class RouterApiService {
@@ -8,11 +9,14 @@ class RouterApiService {
   static String _customBaseUrl = "";
   static String _sessionToken = "";
   static int _sessionGeneration = 0;
-  static int get sessionGeneration => _sessionGeneration;
-  static bool get hasSession => _sessionToken.isNotEmpty;
+  static int get sessionGeneration => _sessionGeneration + CloudApiService.generation;
+  static bool get cloudMode => CloudApiService.enabled;
+  static bool get hasSession => cloudMode ? CloudApiService.selected : _sessionToken.isNotEmpty;
 
   static Future<void> clearSession() async {
     _sessionGeneration++;
+    CloudApiService.clearSession();
+    await CloudApiService.forgetSavedSession();
     _sessionToken = "";
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove("gateway_session_token");
@@ -31,16 +35,19 @@ class RouterApiService {
   }
 
   static String get baseUrl {
+    if (cloudMode) return CloudApiService.origin;
     if (_customBaseUrl.isNotEmpty) return _customBaseUrl;
     const envUrl = String.fromEnvironment("ROUTER_API_URL", defaultValue: "");
     if (envUrl.isNotEmpty) return envUrl;
     return _defaultUrl;
   }
 
-  static Future<void> init() async {
+  static Future<void> init({bool legacy = false}) async {
+    CloudApiService.disable();
     final prefs = await SharedPreferences.getInstance();
     _customBaseUrl = prefs.getString("custom_router_api_url") ?? "";
     _sessionToken = prefs.getString("gateway_session_token") ?? "";
+    if (!legacy) await CloudApiService.initializeCustomer();
   }
 
   static Future<void> setBaseUrl(String url) async {
@@ -69,6 +76,9 @@ class RouterApiService {
   }
 
   static Future<List<Map<String, dynamic>>> devices() async {
+    if (cloudMode) {
+      return CloudApiService.rows((await CloudApiService.snapshot())['devices']);
+    }
     final response = await http.get(
       Uri.parse("$baseUrl/devices"),
       headers: _headers(),
@@ -85,6 +95,9 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> federatedStatus() async {
+    if (cloudMode) {
+      return {'cloud_model': (await CloudApiService.snapshot())['model']};
+    }
     final response = await http.get(
       Uri.parse("$baseUrl/federated-status"),
       headers: _headers(),
@@ -98,6 +111,7 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> startFederatedTraining() async {
+    _requireLive('Federated training controls');
     final response = await http.post(
       Uri.parse("$baseUrl/federated/start"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -112,6 +126,7 @@ class RouterApiService {
     required String mac,
     required String ipAddress,
   }) async {
+    _requireLive('Device registration');
     final response = await http.post(
       Uri.parse("$baseUrl/devices/register"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -128,6 +143,7 @@ class RouterApiService {
   }
 
   static Future<void> deleteDevice(String mac) async {
+    _requireLive('Device removal');
     final response = await http.delete(
       Uri.parse("$baseUrl/devices/$mac"),
       headers: _headers(),
@@ -138,6 +154,7 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> block(String mac) async {
+    if (cloudMode) return CloudApiService.control(mac, 'block');
     final response = await http.post(
       Uri.parse("$baseUrl/devices/$mac/block"),
       headers: _headers(),
@@ -157,6 +174,7 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> unblock(String mac) async {
+    if (cloudMode) return CloudApiService.control(mac, 'unblock');
     final response = await http.post(
       Uri.parse("$baseUrl/devices/$mac/unblock"),
       headers: _headers(),
@@ -183,6 +201,7 @@ class RouterApiService {
     String? ipAddress,
     required List<double> features,
   }) async {
+    _requireLive('Demo telemetry');
     final response = await http.post(
       Uri.parse("$baseUrl/telemetry"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -205,6 +224,14 @@ class RouterApiService {
   }
 
   static Future<List<Map<String, dynamic>>> events({int limit = 50}) async {
+    if (cloudMode) {
+      return CloudApiService.rows((await CloudApiService.snapshot())['alerts'])
+          .take(limit).map((event) => {
+            ...event,
+            'device': event['mac'],
+            'prediction': event['status'],
+          }).toList();
+    }
     final response = await http.get(
       Uri.parse("$baseUrl/events?limit=$limit"),
       headers: _headers(),
@@ -226,6 +253,7 @@ class RouterApiService {
     required String password,
     required String accessCode,
   }) async {
+    if (cloudMode) return CloudApiService.signup(name, email, password);
     final response = await http.post(
       Uri.parse("$baseUrl/auth/signup"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -253,6 +281,7 @@ class RouterApiService {
     required String password,
     String accessCode = "",
   }) async {
+    if (cloudMode) return CloudApiService.login(email, password);
     final response = await http.post(
       Uri.parse("$baseUrl/auth/login"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -279,6 +308,10 @@ class RouterApiService {
     required String currentPassword,
     required String newPassword,
   }) async {
+    if (cloudMode) {
+      return CloudApiService.request('POST', '/cloud/auth/change-password',
+          body: {'current_password': currentPassword, 'new_password': newPassword});
+    }
     final response = await http.post(
       Uri.parse("$baseUrl/auth/change-password"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -292,6 +325,7 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> requestPasswordReset(String email) async {
+    if (cloudMode) return CloudApiService.request('POST', '/cloud/auth/request-password-reset', body: {'email': email});
     final response = await http.post(
       Uri.parse("$baseUrl/auth/request-password-reset"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -305,6 +339,10 @@ class RouterApiService {
     required String token,
     required String newPassword,
   }) async {
+    if (cloudMode) {
+      return CloudApiService.request('POST', '/cloud/auth/reset-password',
+          body: {'email': email, 'token': token, 'new_password': newPassword});
+    }
     final response = await http.post(
       Uri.parse("$baseUrl/auth/reset-password"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -318,6 +356,7 @@ class RouterApiService {
   }
 
   static Future<Map<String, dynamic>> claimGateway(String pairingCode) async {
+    _requireLive('Gateway pairing');
     final response = await http.post(
       Uri.parse("$baseUrl/gateway/claim"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -330,6 +369,10 @@ class RouterApiService {
     required String email,
     required String role,
   }) async {
+    if (cloudMode) {
+      return CloudApiService.request('POST', '/cloud/households/${CloudApiService.householdId}/invites',
+          expected: 201, body: {'email': email, 'role': role});
+    }
     final response = await http.post(
       Uri.parse("$baseUrl/household/invites"),
       headers: _headers({"Content-Type": "application/json"}),
@@ -339,6 +382,7 @@ class RouterApiService {
   }
 
   static Future<String?> householdRole() async {
+    if (cloudMode) return CloudApiService.role;
     final response = await http.get(
       Uri.parse("$baseUrl/household/role"),
       headers: _headers(),
@@ -352,5 +396,9 @@ class RouterApiService {
       throw Exception("Account request failed (${response.statusCode}): ${response.body}");
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  static void _requireLive(String feature) {
+    if (cloudMode) throw Exception('$feature is not available in cloud staging yet. Use live mode.');
   }
 }

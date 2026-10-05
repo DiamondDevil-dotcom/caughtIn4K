@@ -10,13 +10,94 @@ This is federated optimization, not a complete privacy guarantee. FedAvg does
 not encrypt model updates or prevent every inference about training data. The
 Pi's labeled CSV remains on the Pi unless someone copies it manually.
 
-## Sentra connection modes
+## Customer app and website rollout
 
-### Consumer cloud foundation (not activated)
+IoT devices connect to the Pi Wi-Fi access point. The Pi captures traffic,
+runs detection and applies real firewall rules. Customers sign in to the shared
+service from any internet connection; they do not enter a server URL, operator
+token, or connection mode. New users verify email and pair the Pi using its
+one-time setup QR label, or accept a household invitation. One home opens
+automatically; **Your home / Manage homes** allows selecting or adding homes.
 
-The existing deployment below still uses one Pi household. The new optional
-PostgreSQL foundation does not change login, device routing, or the Pi database.
-Consumer multi-household registration and onboarding are not yet available.
+The customer app and website are implemented locally, not automatically
+deployed. The earlier private staging service and installed staging APK remain
+in use until the following deliberate rollout:
+
+1. Apply schema version **4** with the private `cloud_database.py init` command
+   below, then run `cloud_database.py check`. This is additive: accounts,
+   password hashes, memberships, gateways and Pi data are retained. Existing
+   accounts are **not** falsely marked email-verified; they confirm their email
+   once before accessing a home through the public customer service.
+2. Keep the existing private database URL and session signing secret. Configure
+   the backend privately with `GHOST_CLOUD_CUSTOMER_ENABLED=true`,
+   `GHOST_SMTP_HOST`, `GHOST_SMTP_PORT` (`587` STARTTLS or `465` TLS),
+   `GHOST_SMTP_USERNAME`, `GHOST_SMTP_PASSWORD`, and `GHOST_SMTP_FROM`.
+   Use an app password where required by the email provider. Never put these
+   credentials in chat, Git, the app, or `VITE_` variables.
+3. Set `GHOST_CLOUD_WEB_ORIGINS` to the exact deployed HTTPS website origin
+   (comma-separated if there are several). No wildcard, path or trailing slash
+   is accepted. An empty list permits mobile access but not browser access.
+   Preserve the **original** live gateway; change only the separate service
+   after authorizing and deploying the customer source.
+4. Keep build command `pip install -r requirements_cloud.txt`; switch the
+   separate service start command to
+   `uvicorn cloud_customer_app:app --host 0.0.0.0 --port $PORT`.
+   Health path is `/health`. This public entrypoint does not require an operator
+   staging token. User bearer sessions and Pi machine credentials are still
+   mandatory on their respective protected routes. The health endpoint only
+   proves process readiness, not database, email or Pi connectivity.
+5. Verify real login, delivery of verification/reset email, home access and
+   fresh Pi snapshots before installing the new APK or publishing the website.
+   Build Flutter with `--dart-define=CLOUD_API_URL=<customer-https-origin>`,
+   and Vite with `VITE_CLOUD_API_URL=<customer-https-origin>`. Both defaults
+   currently point to `https://caughtin4k-1.onrender.com`, which must first run
+   the customer entrypoint. Origins are build configuration, never customer
+   settings. Rebuild the website; do not publish stale tracked build output.
+6. Keep the working Pi uploader/control services and raw datasets/models in
+   place. Their optional old staging header is ignored by the customer
+   entrypoint; the gateway credential remains required. Do not restart capture
+   or active FL training just to change the web service.
+7. On a nonessential Pi Wi-Fi client, verify **both** clients' Block/Unblock
+   buttons over a different internet connection. Keep the SSH/training laptop
+   available for restoration and disable cellular fallback when measuring the
+   target client's Wi-Fi connectivity.
+
+Only household owners/admins can submit controls. Stale/offline data disables
+buttons. Queued/delivered never means blocked; only a Pi `succeeded` result with
+`applied` confirms enforcement. Unconfirmed commands retain their UUID for
+read-only recovery without replay: secure storage on the phone, account-scoped
+session storage in the browser. Closing a browser session can discard browser
+recovery state; inspect the Pi/device before attempting another command.
+Successful password changes/reset invalidate older sessions.
+
+Authentication and API limits use shared PostgreSQL counters and fail closed
+when that storage is unavailable. They use the ASGI client's address, **not**
+arbitrary client-supplied forwarding headers. Before public deployment verify
+the hosting proxy configuration preserves the real client address with trusted
+proxy handling; otherwise multiple customers may share a limit. Do not enable
+unrestricted forwarded-header trust on an internet-accessible backend.
+
+Local checks: backend customer/household/command tests, `flutter test`,
+`flutter analyze`, `flutter build apk --debug`, and website
+`node --test src/cloud-client.test.js` followed by `npm run build`.
+For opt-in live schema/email-token/session-revocation checks run
+`test_cloud_integration.py` privately after schema 4 is applied; email delivery
+is mocked in that suite and must also be checked with an actual account.
+The live suite creates and deletes only its uniquely named test records.
+
+Customer model metadata shows the Pi checkpoint's availability, not proof of
+a completed FL round. Genuine laptop/Pi Flower training remains operational
+through the existing coordinator workflow below, not the customer service.
+Production availability and email delivery must be tested separately;
+a sleeping free-tier instance is not an always-available smart-home service.
+
+## Earlier foundation and legacy gateway procedures
+
+### Consumer cloud foundation setup
+
+The legacy deployment below uses one Pi household. The opt-in PostgreSQL
+foundation does not rewrite that Pi database; public customer registration and
+onboarding require the separate customer entrypoint described above.
 
 Use a Supabase PostgreSQL **Session pooler** connection for the backend. Keep
 the Data API disabled; Flutter and Vite must never receive database credentials.
@@ -249,11 +330,25 @@ replaced. The new channel remains disabled on the Pi by default.
   outcome; reconcile against a fresh snapshot before issuing a new command.
 
 The command channel is not deployed or enabled by source changes alone.
-Sentra/website integration and a controlled real-device block/unblock test
-are required before switching consumer clients away from the live gateway.
-Do not enable it until private configuration and loopback export are installed.
-Free-tier staging
-sleeping is not evidence of production availability.
+After deployment and explicit Pi worker enablement, use the local
+`Backend/Backend/verify_cloud_control.py --url <staging-origin> --bundle
+<private-import-bundle> --action block` operator helper. It prompts privately
+for staging access and owner login, requires fresh household-scoped metadata,
+lists devices locally, and requires a numbered selection plus exact `BLOCK`
+confirmation. Choose only a nonessential client of the Pi-hosted Wi-Fi, never
+the Pi, uplink, or SSH/training laptop. Run again with `--action unblock`
+and select the same MAC to restore access. Confirm actual Wi-Fi connectivity
+with cellular fallback disabled; a firewall acknowledgement alone does not
+prove end-to-end isolation.
+The helper prints a command UUID before submission. If interrupted or timed
+out, recover with `--action status --command-id <UUID>` instead of blindly
+resubmitting. Queued/delivered/unknown status never counts as success.
+The installed earlier test APK exposed private staging setup. That workflow
+has been removed from the current customer source in favor of normal account
+sign-in, verification, home pairing and remote controls in both clients. Do not
+install the new customer APK against the still-private staging entrypoint:
+customer requests intentionally do not contain its operator access token.
+Follow the public customer rollout above before replacing consumer clients.
 
 For the separate cloud staging service, use root `Backend/Backend`, build
 `pip install -r requirements_cloud.txt`, and start

@@ -10,6 +10,7 @@ import '../providers/demo_mode_provider.dart';
 import '../providers/router_device_provider.dart';
 import '../services/router_api_service.dart';
 import '../widgets/liquid_glass_surface.dart';
+import '../services/cloud_api_service.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -23,7 +24,7 @@ class SettingsScreen extends StatelessWidget {
     final routerProvider = context.watch<RouterDeviceProvider>();
     final canManageHousehold = const {'owner', 'admin'}.contains(authProvider.householdRole);
     final recentNotifications =
-        [...alertProvider.notifications, ...routerProvider.notifications]..sort(
+        [if (!RouterApiService.cloudMode) ...alertProvider.notifications, ...routerProvider.notifications]..sort(
           (a, b) =>
               (b['timestamp'] as String).compareTo(a['timestamp'] as String),
         );
@@ -43,7 +44,7 @@ class SettingsScreen extends StatelessWidget {
           ),
 
           const SizedBox(height: 15),
-          if (authProvider.householdRole == null)
+          if (authProvider.householdRole == null && !RouterApiService.cloudMode)
             LiquidGlassSurface(
               child: ListTile(
                 leading: const Icon(Icons.router_outlined),
@@ -82,6 +83,18 @@ class SettingsScreen extends StatelessWidget {
           ),
 
           const SizedBox(height: 15),
+          LiquidGlassSurface(child: ListTile(
+            leading: const Icon(Icons.cloud_outlined),
+            title: const Text('Your home'),
+            subtitle: Text(CloudApiService.gatewayName ?? 'Home'),
+            onTap: () {
+              context.read<RouterDeviceProvider>().clearCachedData();
+              context.read<ActivityProvider>().clearCachedData();
+              context.read<AuthProvider>().chooseAnotherHome();
+            },
+          )),
+          const SizedBox(height: 15),
+          if (!RouterApiService.cloudMode)
           LiquidGlassSurface(
             child: ListTile(
               leading: const Icon(Icons.cloud_sync_outlined),
@@ -114,7 +127,7 @@ class SettingsScreen extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          LiquidGlassSurface(
+          if (!RouterApiService.cloudMode) LiquidGlassSurface(
             child: SwitchListTile(
               secondary: const Icon(Icons.notifications_none),
               title: const Text("Live notifications"),
@@ -196,7 +209,7 @@ class SettingsScreen extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          LiquidGlassSurface(
+          if (!RouterApiService.cloudMode) LiquidGlassSurface(
             child: SwitchListTile(
               secondary: const Icon(Icons.science_outlined),
               title: const Text("Demo Mode"),
@@ -383,6 +396,9 @@ class SettingsScreen extends StatelessWidget {
                 current.text,
                 next.text,
               );
+              if (error == null && RouterApiService.cloudMode && context.mounted) {
+                await context.read<AuthProvider>().signOut();
+              }
               if (!dialogContext.mounted) return;
               Navigator.pop(dialogContext);
               ScaffoldMessenger.of(context).showSnackBar(

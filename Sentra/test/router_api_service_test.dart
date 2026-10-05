@@ -12,7 +12,7 @@ import 'package:nyxis_security/providers/activity_provider.dart';
 void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    await RouterApiService.init();
+    await RouterApiService.init(legacy: true);
   });
 
   test('Render is the shared default', () {
@@ -45,7 +45,7 @@ void main() {
       );
       expect(RouterApiService.hasSession, isTrue);
       expect(await RouterApiService.devices(), isEmpty);
-      await RouterApiService.init();
+      await RouterApiService.init(legacy: true);
       expect(RouterApiService.hasSession, isTrue);
       await RouterApiService.clearSession();
       expect(RouterApiService.hasSession, isFalse);
@@ -135,7 +135,7 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'gateway_session_token': 'test-session',
     });
-    await RouterApiService.init();
+    await RouterApiService.init(legacy: true);
     final generation = RouterApiService.sessionGeneration;
     await RouterApiService.setBaseUrl('https://replacement.example/');
     expect(RouterApiService.baseUrl, 'https://replacement.example');
@@ -149,7 +149,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'gateway_session_token': 'test-session',
       });
-      await RouterApiService.init();
+      await RouterApiService.init(legacy: true);
       final devices = Completer<http.Response>();
       final events = Completer<http.Response>();
       final requests = <String>[];

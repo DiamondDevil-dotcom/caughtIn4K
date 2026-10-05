@@ -11,10 +11,12 @@ class ActivityProvider extends ChangeNotifier {
   Timer? _pollingTimer;
   bool _fetching = false;
   bool _disposed = false;
+  DateTime? _lastCloudFetch;
 
   void clearCachedData() {
     events = [];
     lastError = null;
+    _lastCloudFetch = null;
     notifyListeners();
   }
 
@@ -28,6 +30,11 @@ class ActivityProvider extends ChangeNotifier {
 
   Future<void> _fetch() async {
     if (_disposed || _fetching || !RouterApiService.hasSession) return;
+    if (RouterApiService.cloudMode && _lastCloudFetch != null &&
+        DateTime.now().difference(_lastCloudFetch!).inSeconds < 15) {
+      return;
+    }
+    _lastCloudFetch = RouterApiService.cloudMode ? DateTime.now() : null;
     _fetching = true;
     final requestedUrl = RouterApiService.baseUrl;
     final requestedSession = RouterApiService.sessionGeneration;

@@ -19,6 +19,7 @@ MIGRATIONS = (
     (1, MIGRATION_DIR / "001_cloud_foundation.sql"),
     (2, MIGRATION_DIR / "002_gateway_monitoring.sql"),
     (3, MIGRATION_DIR / "003_gateway_commands.sql"),
+    (4, MIGRATION_DIR / "004_customer_accounts.sql"),
 )
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

@@ -1,4 +1,4 @@
-"""Development-only cloud API. No endpoint delegates to the legacy Pi."""
+"""Scoped cloud account/gateway API shared by private and customer entrypoints."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import cloud_gateways as gateways
 import cloud_households as households
 import cloud_monitoring as monitoring
 import cloud_commands as commands
+import cloud_account_security as security
 from cloud_database import CloudDatabaseError
 
 logger = logging.getLogger(__name__)
@@ -48,11 +49,31 @@ class AcceptInviteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invite_code: str = Field(min_length=1, max_length=256)
 
+class EmailInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=1, max_length=254)
 
-def build_router(secret: str) -> APIRouter:
+
+class CodeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=256)
+
+
+class ResetInput(EmailInput):
+    token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=1024)
+
+
+class ChangePasswordInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=8, max_length=1024)
+
+
+def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
     if len(secret) < 32:
         raise ValueError("Cloud account mode requires GHOST_CLOUD_SESSION_SECRET with at least 32 characters.")
-    router = APIRouter(prefix="/cloud", tags=["Cloud account development"])
+    router = APIRouter(prefix="/cloud", tags=["Cloud accounts"])
     bearer = HTTPBearer(auto_error=False)
 
     async def operation(function, *args):
@@ -62,11 +83,16 @@ def build_router(secret: str) -> APIRouter:
             logger.error("Cloud account database operation failed.")
             raise HTTPException(status_code=503, detail="Cloud account storage is unavailable.") from None
 
-    async def current_account(
+    async def current_session(
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     ):
         header = f"Bearer {credentials.credentials}" if credentials else ""
         return await operation(accounts.authenticate, header, secret)
+
+    async def current_account(account=Depends(current_session)):
+        if require_verified and account.get("email_verified_at") is None:
+            raise HTTPException(status_code=403, detail="Verify your email before accessing a home.")
+        return account
 
     def session_result(account):
         return {
@@ -87,8 +113,30 @@ def build_router(secret: str) -> APIRouter:
         return session_result(account)
 
     @router.get("/auth/me")
-    async def me(account=Depends(current_account)):
+    async def me(account=Depends(current_session)):
         return accounts.public_account(account)
+
+    @router.post("/auth/request-password-reset")
+    async def request_reset(payload: EmailInput):
+        await operation(security.limit, "reset:" + payload.email.strip().lower(), secret, 3, 900)
+        return await operation(security.request_reset, payload.email)
+
+    @router.post("/auth/reset-password")
+    async def reset_password(payload: ResetInput):
+        return await operation(security.reset_password, payload.email, payload.token, payload.new_password)
+
+    @router.post("/auth/change-password")
+    async def change_password(payload: ChangePasswordInput, account=Depends(current_account)):
+        return await operation(security.change_password, account["id"], payload.current_password, payload.new_password)
+
+    @router.post("/auth/request-verification")
+    async def request_verification(account=Depends(current_session)):
+        await operation(security.limit, "verify:" + str(account["id"]), secret, 3, 900)
+        return await operation(security.send_verification, account["id"])
+
+    @router.post("/auth/verify-email")
+    async def verify_email(payload: CodeInput, account=Depends(current_session)):
+        return await operation(security.verify_email, account["id"], payload.token)
 
     @router.post("/auth/logout-all")
     async def logout_all(account=Depends(current_account)):

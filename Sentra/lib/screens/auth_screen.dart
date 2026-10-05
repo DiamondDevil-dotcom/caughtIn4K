@@ -86,7 +86,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                         const SizedBox(height: 16),
                       ],
-                      TextFormField(
+                      if (!RouterApiService.cloudMode) TextFormField(
                         controller: _accessCodeController,
                         decoration: InputDecoration(
                           labelText: _creating

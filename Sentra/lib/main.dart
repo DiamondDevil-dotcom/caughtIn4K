@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'services/router_api_service.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
@@ -11,9 +12,17 @@ import 'providers/router_device_provider.dart';
 import 'providers/demo_mode_provider.dart';
 import 'providers/activity_provider.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await RouterApiService.init();
+  try {
+    await RouterApiService.init();
+  } on PlatformException {
+    runApp(const StartupFailureApp());
+    return;
+  } on FormatException {
+    runApp(const StartupFailureApp());
+    return;
+  }
   runApp(
 
     MultiProvider(
@@ -41,6 +50,25 @@ void main() async {
         ),
       ],
       child: const NyxisApp(),
+    ),
+  );
+}
+
+class StartupFailureApp extends StatelessWidget {
+  const StartupFailureApp({super.key});
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    home: Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Your secure account could not be loaded. Retry, or contact support before changing a network action.'),
+            FilledButton(onPressed: main, child: const Text('Retry')),
+          ]),
+        ),
+      ),
     ),
   );
 }

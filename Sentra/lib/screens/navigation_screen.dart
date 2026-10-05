@@ -8,6 +8,7 @@ import 'settings_screen.dart';
 import 'demo_control_screen.dart';
 import '../providers/demo_mode_provider.dart';
 import '../widgets/liquid_glass_navigation.dart';
+import '../services/router_api_service.dart';
 
 class NavigationScreen extends StatefulWidget {
   const NavigationScreen({super.key});
@@ -48,7 +49,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final demoMode = context.watch<DemoModeProvider>().enabled;
+    final demoMode = context.watch<DemoModeProvider>().enabled && !RouterApiService.cloudMode;
     final pages = _pages(demoMode);
     final safeIndex = currentIndex < pages.length ? currentIndex : 0;
     return Scaffold(

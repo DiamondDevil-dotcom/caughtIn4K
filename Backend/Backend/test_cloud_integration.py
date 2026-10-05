@@ -2,6 +2,8 @@
 
 import os
 import secrets
+import hashlib
+import hmac
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -15,6 +17,7 @@ import cloud_gateways as gateways
 import cloud_households as households
 import cloud_monitoring as monitoring
 import cloud_commands as commands
+import cloud_account_security as security
 from cloud_database import check_schema, connect, read_database_url
 
 
@@ -23,6 +26,61 @@ from cloud_database import check_schema, connect, read_database_url
     "Live cloud integration is explicit and opt-in.",
 )
 class CloudIntegrationTests(unittest.TestCase):
+    def test_customer_email_proof_recovery_revocation_and_shared_limits(self):
+        check_schema()
+        account_id = None
+        limit_key = "integration:" + uuid4().hex
+        secret = secrets.token_urlsafe(32)
+        key_hash = hmac.new(secret.encode(), limit_key.encode(), hashlib.sha256).hexdigest()
+        password = secrets.token_urlsafe(24)
+        try:
+            account = accounts.create_account("Customer integration", f"test-{uuid4().hex}@example.invalid", password)
+            account_id = account["id"]
+            self.assertIsNone(account["email_verified_at"])
+            token = accounts.issue_token(account, secret)
+            with patch.object(security, "send_code") as mail:
+                security.send_verification(account_id)
+                code = mail.call_args.args[1]
+            with self.assertRaises(HTTPException):
+                security.verify_email(account_id, "wrong")
+            with connect() as connection:
+                row = connection.execute(
+                    "SELECT attempts FROM caughtin4k.email_verification_tokens WHERE account_id = %s", (account_id,),
+                ).fetchone()
+                self.assertEqual(row["attempts"], 1)
+            security.verify_email(account_id, code)
+            self.assertIsNotNone(accounts.authenticate("Bearer " + token, secret)["email_verified_at"])
+            with self.assertRaises(HTTPException):
+                security.verify_email(account_id, code)
+            with patch.object(security, "send_code") as mail:
+                security.request_reset(account["email"])
+                reset = mail.call_args.args[1]
+            next_password = secrets.token_urlsafe(24)
+            security.reset_password(account["email"], reset, next_password)
+            with self.assertRaises(HTTPException):
+                accounts.authenticate("Bearer " + token, secret)
+            with self.assertRaises(HTTPException):
+                accounts.login(account["email"], password)
+            changed = accounts.login(account["email"], next_password)
+            self.assertEqual(changed["id"], account_id)
+            with self.assertRaises(HTTPException):
+                security.reset_password(account["email"], reset, password)
+            for _ in range(3):
+                security.limit(limit_key, secret, 3, 900)
+            with self.assertRaises(HTTPException) as caught:
+                security.limit(limit_key, secret, 3, 900)
+            self.assertEqual(caught.exception.status_code, 429)
+            with connect() as connection:
+                attempts = connection.execute(
+                    "SELECT attempts FROM caughtin4k.request_limits WHERE key_hash = %s", (key_hash,),
+                ).fetchone()["attempts"]
+                self.assertEqual(attempts, 4)
+        finally:
+            with connect() as connection:
+                connection.execute("DELETE FROM caughtin4k.request_limits WHERE key_hash = %s", (key_hash,))
+                if account_id is not None:
+                    connection.execute("DELETE FROM caughtin4k.accounts WHERE id = %s", (account_id,))
+
     def test_two_households_pairing_replay_revocation_and_concurrent_claim(self):
         check_schema()
         account_ids = []

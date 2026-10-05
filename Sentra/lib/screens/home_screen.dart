@@ -7,6 +7,7 @@ import '../providers/alert_provider.dart';
 import '../providers/router_device_provider.dart';
 import '../widgets/liquid_glass_button.dart';
 import 'alert_screen.dart';
+import '../services/router_api_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,11 +20,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<AlertProvider>(context);
-    final alert = provider.result;
+    final alert = RouterApiService.cloudMode ? null : provider.result;
     final routerProvider = context.watch<RouterDeviceProvider>();
     final routerDevices = routerProvider.devices;
     final nowSeconds = DateTime.now().millisecondsSinceEpoch / 1000;
     final onlineDevices = routerDevices.where((device) {
+      if (RouterApiService.cloudMode) return true;
       final lastSeen = (device['last_seen'] as num?)?.toDouble();
       return device['online'] == true ||
           (lastSeen != null && nowSeconds - lastSeen <= 60);
@@ -32,6 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
         const priority = {
           'BLOCKED': 4,
           'ALERT': 3,
+          'ATTACK': 3,
           'WARNING': 2,
           'SAFE': 1,
         };
@@ -59,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final deviceCount = onlineDevices.length;
     final threatCount = onlineDevices.where(
         (device) => device['status'] == 'WARNING' ||
-          device['status'] == 'ALERT' ||
+          device['status'] == 'ALERT' || device['status'] == 'ATTACK' ||
           device['status'] == 'BLOCKED',
     ).length;
 
@@ -78,6 +81,12 @@ class _HomeScreenState extends State<HomeScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          if (RouterApiService.cloudMode) ...[
+            Text(routerProvider.cloudFreshness),
+            if (routerProvider.lastError != null)
+              Text('Cloud unavailable: ${routerProvider.lastError}'),
+            const SizedBox(height: 12),
+          ],
           Text(
             "Network overview",
             style: GoogleFonts.spaceGrotesk(
@@ -88,7 +97,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            safe
+            RouterApiService.cloudMode
+              ? 'Last-known household monitoring'
+              : safe
               ? (uncertain ? "Traffic needs more evidence." : "Everything looks secure.")
               : "Threat detected!",
             style: GoogleFonts.spaceGrotesk(
@@ -105,7 +116,9 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 children: [
                   Icon(
-                    uncertain
+                    RouterApiService.cloudMode && routerProvider.cloudDataStale
+                      ? Icons.cloud_off
+                      : uncertain
                       ? Icons.help_outline_rounded
                       : safe
                         ? Icons.verified_user
@@ -120,7 +133,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 15),
 
                   Text(
-                    uncertain
+                    RouterApiService.cloudMode && routerProvider.cloudDataStale
+                      ? 'Data stale'
+                      : RouterApiService.cloudMode && liveRouterDevice == null
+                      ? 'No device data'
+                      : uncertain
                       ? "Uncertain"
                       : safe
                         ? "Protected"
@@ -137,7 +154,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     safe
                         ? (liveRouterDevice == null
                           ? "Waiting for Raspberry Pi telemetry."
-                          : "Monitoring ${onlineDevices.length} connected IoT ${onlineDevices.length == 1 ? "device" : "devices"}.")
+                          : RouterApiService.cloudMode
+                            ? '${onlineDevices.length} devices in the latest Pi snapshot.'
+                            : "Monitoring ${onlineDevices.length} connected IoT ${onlineDevices.length == 1 ? "device" : "devices"}.")
                       : uncertain
                           ? "Rising attack confidence: ${liveRouterDevice?["attack_probability"] ?? alert?["confidence"]}%\nMonitoring closely..."
                           : "${liveRouterDevice?["prediction"] ?? alert?["prediction"]}\nConfidence: ${liveRouterDevice?["attack_probability"] ?? alert?["confidence"]}%",
@@ -219,6 +238,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _federatedModelCard(RouterDeviceProvider provider) {
+    if (RouterApiService.cloudMode) {
+      final model = provider.federatedStatus?['cloud_model'];
+      return Card(child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Pi model (cloud metadata)', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text(model is Map && model['available'] == true
+              ? 'Checkpoint available: ${model['checkpoint_name'] ?? "unnamed"}'
+              : 'Model availability not confirmed.'),
+          const Text('Cloud snapshots do not report federated rounds or aggregation. '
+              'Federated training runs separately on the laptop and Pi; remote training controls are not available here.'),
+        ]),
+      ));
+    }
     final status = provider.federatedStatus;
     final training = status?['training'] is Map<String, dynamic>
         ? status!['training'] as Map<String, dynamic>

@@ -43,6 +43,7 @@ def public_account(account: dict[str, Any]) -> dict[str, Any]:
         "account_id": str(account["id"]),
         "email": account["email"],
         "name": account["name"],
+        "email_verified": account.get("email_verified_at") is not None,
     }
 
 
@@ -60,7 +61,7 @@ def create_account(name: str, email: str, password: str) -> dict[str, Any]:
             "(id, email, name, password_hash, password_salt, password_algorithm, password_iterations) "
             "VALUES (%s, %s, %s, %s, %s, 'pbkdf2_sha256', %s) "
             "ON CONFLICT (email) DO NOTHING "
-            "RETURNING id, email, name, session_version",
+            "RETURNING id, email, name, session_version, email_verified_at",
             (uuid4(), email, name, digest, salt.hex(), PASSWORD_ITERATIONS),
         ).fetchone()
         if account is None:
@@ -75,7 +76,7 @@ def login(email: str, password: str) -> dict[str, Any]:
     with connect() as connection:
         account = connection.execute(
             "SELECT id, email, name, password_hash, password_salt, password_algorithm, "
-            "password_iterations, session_version FROM caughtin4k.accounts WHERE email = %s",
+            "password_iterations, session_version, email_verified_at FROM caughtin4k.accounts WHERE email = %s",
             (email,),
         ).fetchone()
     # Missing accounts still do the expensive work; responses do not identify which field failed.
@@ -121,7 +122,7 @@ def authenticate(header: str, secret: str) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Cloud session expired or invalid. Sign in again.") from None
     with connect() as connection:
         account = connection.execute(
-            "SELECT id, email, name, session_version FROM caughtin4k.accounts WHERE id = %s",
+            "SELECT id, email, name, session_version, email_verified_at FROM caughtin4k.accounts WHERE id = %s",
             (account_id,),
         ).fetchone()
     if account is None or account["session_version"] != data["version"]:

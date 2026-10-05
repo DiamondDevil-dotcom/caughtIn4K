@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../services/notification_service.dart';
 import '../services/router_api_service.dart';
+import '../services/cloud_api_service.dart';
 
 /// Polls the Pi's router-mode IDS agent for live per-device status
 /// (SAFE / WARNING / ALERT / BLOCKED) and exposes block/unblock actions.
@@ -22,6 +23,25 @@ class RouterDeviceProvider extends ChangeNotifier {
   bool _fetchingDevices = false;
   bool _fetchingFederatedStatus = false;
   bool _disposed = false;
+  DateTime? _lastCloudFetch;
+  String? pendingControlMac;
+  final Map<String, bool> confirmedControls = {};
+  final Map<String, DateTime> _confirmedAt = {};
+
+  void recordConfirmedControl(String mac, bool blocked, {DateTime? completedAt}) {
+    confirmedControls[mac] = blocked;
+    _confirmedAt[mac] = completedAt ?? DateTime.now();
+    if (!_disposed) notifyListeners();
+  }
+  bool get cloudDataStale {
+    final snapshot = CloudApiService.lastSnapshot;
+    final observed = DateTime.tryParse(snapshot?['observed_at'] as String? ?? '');
+    return lastError != null || snapshot == null || snapshot['data_stale'] == true || snapshot['recent_contact'] != true ||
+        observed == null || DateTime.now().difference(observed).inSeconds > 90;
+  }
+  String get cloudFreshness => cloudDataStale
+      ? 'Last-known cloud data (stale/offline). Network controls require a fresh gateway snapshot.'
+      : 'Cloud snapshot refreshed by Pi. Device presence is last-known, not a live Wi-Fi connection count.';
 
   void clearCachedData() {
     devices = [];
@@ -31,6 +51,9 @@ class RouterDeviceProvider extends ChangeNotifier {
     notifications.clear();
     _lastStatusByMac.clear();
     lastError = null;
+    confirmedControls.clear();
+    _confirmedAt.clear();
+    _lastCloudFetch = null;
     notifyListeners();
   }
 
@@ -47,8 +70,13 @@ class RouterDeviceProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> refresh() async {
+    _lastCloudFetch = null;
+    await _fetch();
+  }
+
   Future<void> _fetchFederatedStatus() async {
-    if (_disposed || _fetchingFederatedStatus || !RouterApiService.hasSession) return;
+    if (_disposed || RouterApiService.cloudMode || _fetchingFederatedStatus || !RouterApiService.hasSession) return;
     _fetchingFederatedStatus = true;
     final requestedUrl = RouterApiService.baseUrl;
     final requestedSession = RouterApiService.sessionGeneration;
@@ -101,6 +129,12 @@ class RouterDeviceProvider extends ChangeNotifier {
 
   Future<void> _fetch() async {
     if (_disposed || _fetchingDevices || !RouterApiService.hasSession) return;
+    if (RouterApiService.cloudMode && _lastCloudFetch != null &&
+        DateTime.now().difference(_lastCloudFetch!).inSeconds < 15) {
+      notifyListeners();
+      return;
+    }
+    _lastCloudFetch = RouterApiService.cloudMode ? DateTime.now() : null;
     _fetchingDevices = true;
     final requestedUrl = RouterApiService.baseUrl;
     final requestedSession = RouterApiService.sessionGeneration;
@@ -110,7 +144,20 @@ class RouterDeviceProvider extends ChangeNotifier {
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }
-      _notifyOnChanges(fetched);
+      if (!RouterApiService.cloudMode) _notifyOnChanges(fetched);
+      if (RouterApiService.cloudMode) {
+        federatedStatus = {'cloud_model': CloudApiService.lastSnapshot?['model']};
+        federatedStatusError = null;
+        final observed = DateTime.tryParse(CloudApiService.lastSnapshot?['observed_at'] as String? ?? '');
+        confirmedControls.removeWhere((mac, blocked) {
+          final completed = _confirmedAt[mac];
+          if (observed != null && completed != null && !observed.isBefore(completed)) {
+            _confirmedAt.remove(mac);
+            return true;
+          }
+          return false;
+        });
+      }
       devices = fetched;
       lastError = null;
     } catch (error) {
@@ -154,13 +201,35 @@ class RouterDeviceProvider extends ChangeNotifier {
   }
 
   Future<void> block(String mac) async {
-    await RouterApiService.block(mac);
-    await _fetch();
+    await _control(mac, true);
   }
 
   Future<void> unblock(String mac) async {
-    await RouterApiService.unblock(mac);
-    await _fetch();
+    await _control(mac, false);
+  }
+
+  Future<void> _control(String mac, bool blocked) async {
+    if (pendingControlMac != null) throw Exception('A network command is already pending.');
+    pendingControlMac = mac;
+    final version = RouterApiService.sessionGeneration;
+    notifyListeners();
+    try {
+      final result = blocked
+          ? await RouterApiService.block(mac)
+          : await RouterApiService.unblock(mac);
+      if (version != RouterApiService.sessionGeneration) {
+        throw Exception('Session changed; reconcile command status before retrying.');
+      }
+      if (RouterApiService.cloudMode) {
+        recordConfirmedControl(mac, blocked,
+            completedAt: DateTime.tryParse(result['completed_at'] as String? ?? ''));
+      }
+      _lastCloudFetch = null;
+      await _fetch();
+    } finally {
+      pendingControlMac = null;
+      if (!_disposed) notifyListeners();
+    }
   }
 
   Future<void> registerDevice({

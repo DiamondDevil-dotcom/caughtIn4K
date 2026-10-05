@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/router_api_service.dart';
+import '../services/cloud_api_service.dart';
 
-/// Accounts are stored in the router agent's SQLite database (see
-/// storage.py), not just on this phone. SharedPreferences only caches the
-/// signed-in session locally so the app can auto-resume without a password.
+/// Customer accounts use the shared service; sessions use secure phone storage.
 class AuthProvider extends ChangeNotifier {
   static const _sessionKey = 'session_account';
   static const _signedInKey = 'signed_in';
@@ -15,15 +14,51 @@ class AuthProvider extends ChangeNotifier {
   String? _email;
   String? _name;
   String? _householdRole;
+  bool emailVerified = false;
+  bool choosingHome = false;
 
   bool get ready => _ready;
   bool get isSignedIn => _email != null;
   bool get passwordFallbackForLaunch => _passwordFallbackForLaunch;
   String get name => _name ?? 'Security owner';
   String get email => _email ?? '';
-  String? get householdRole => _householdRole;
+  String? get householdRole => RouterApiService.cloudMode ? CloudApiService.role : _householdRole;
+
+  void selectCloudGateway(Map<String, dynamic> gateway) {
+    CloudApiService.select(gateway);
+    choosingHome = false;
+    notifyListeners();
+  }
+
+  void chooseAnotherHome() {
+    choosingHome = true;
+    CloudApiService.generation++;
+    CloudApiService.gatewayId = null;
+    CloudApiService.householdId = null;
+    CloudApiService.role = null;
+    CloudApiService.lastSnapshot = null;
+    notifyListeners();
+  }
+
+  Future<void> refreshAccount() async {
+    final result = await CloudApiService.request('GET', '/cloud/auth/me');
+    emailVerified = result['email_verified'] == true;
+    await CloudApiService.rememberAccount({...result, 'access_token': CloudApiService.session});
+    notifyListeners();
+  }
 
   Future<void> load() async {
+    if (RouterApiService.cloudMode) {
+      final account = CloudApiService.savedAccount;
+      if (account != null && CloudApiService.session.isNotEmpty) {
+        _email = account['email'] as String;
+        _name = account['name'] as String;
+        emailVerified = account['email_verified'] == true;
+      }
+      _ready = true;
+      notifyListeners();
+      return;
+    }
     final preferences = await SharedPreferences.getInstance();
     final session = preferences.getStringList(_sessionKey);
     if (preferences.getBool(_signedInKey) == true &&
@@ -39,6 +74,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> _persistSession(String email, String name, String? role) async {
+    if (RouterApiService.cloudMode) return;
     final preferences = await SharedPreferences.getInstance();
     await preferences.setStringList(_sessionKey, [email, name, role ?? '']);
     await preferences.setBool(_signedInKey, true);
@@ -61,12 +97,14 @@ class AuthProvider extends ChangeNotifier {
       _email = result['email'] as String;
       _name = result['name'] as String;
       _householdRole = result['household_role'] as String?;
+      emailVerified = result['email_verified'] == true;
       _passwordFallbackForLaunch = false;
+      choosingHome = false;
       await _persistSession(_email!, _name!, _householdRole);
       notifyListeners();
       return null;
     } catch (error) {
-      return 'Could not reach the router agent: $error';
+      return 'Sign in failed: $error';
     }
   }
 
@@ -89,12 +127,14 @@ class AuthProvider extends ChangeNotifier {
       _email = result['email'] as String;
       _name = result['name'] as String;
       _householdRole = result['household_role'] as String?;
+      emailVerified = result['email_verified'] == true;
       _passwordFallbackForLaunch = false;
+      choosingHome = false;
       await _persistSession(_email!, _name!, _householdRole);
       notifyListeners();
       return null;
     } catch (error) {
-      return 'Could not reach the router agent: $error';
+      return 'Could not create account: $error';
     }
   }
 
@@ -106,6 +146,8 @@ class AuthProvider extends ChangeNotifier {
     _email = null;
     _name = null;
     _householdRole = null;
+    emailVerified = false;
+    choosingHome = false;
     notifyListeners();
   }
 
@@ -132,7 +174,7 @@ class AuthProvider extends ChangeNotifier {
       );
       return result['success'] == true ? null : result['error'] as String? ?? 'Password change failed.';
     } catch (error) {
-      return 'Could not reach the router agent: $error';
+      return 'Could not change your password: $error';
     }
   }
 }

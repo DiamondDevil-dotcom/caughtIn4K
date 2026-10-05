@@ -113,7 +113,7 @@ class CloudAccountTests(unittest.TestCase):
 
     def test_public_account_never_returns_password_or_session_version(self):
         result = accounts.public_account({**self.account, "password_hash": "secret"})
-        self.assertEqual(set(result), {"success", "account_id", "email", "name"})
+        self.assertEqual(set(result), {"success", "account_id", "email", "name", "email_verified"})
 
 
 class CloudApiTests(unittest.TestCase):

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/router_device_provider.dart';
+import '../providers/auth_provider.dart';
+import '../services/router_api_service.dart';
+import '../services/cloud_api_service.dart';
 
 class DevicesScreen extends StatelessWidget {
   const DevicesScreen({super.key});
@@ -13,7 +16,7 @@ class DevicesScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text("Devices"),
         actions: [
-          IconButton(
+          if (!RouterApiService.cloudMode) IconButton(
             tooltip: 'Add device',
             icon: const Icon(Icons.add_circle_outline),
             onPressed: () => _showAddDeviceDialog(context),
@@ -36,23 +39,53 @@ class DevicesScreen extends StatelessWidget {
       return !mac.startsWith('02:00:00:00:01:');
     }).toList();
 
-    if (foldDevices.isEmpty && router.lastError == null) {
+    if (foldDevices.isEmpty && router.lastError == null && !RouterApiService.cloudMode) {
       return const [];
     }
 
     return [
-      const Padding(
+      Padding(
         padding: EdgeInsets.only(bottom: 12),
         child: Text(
-          'Live Network Devices (Router)',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          RouterApiService.cloudMode ? 'Household devices (cloud snapshot)' : 'Live Network Devices (Router)',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
       ),
+      if (RouterApiService.cloudMode) ...[
+          Text(router.cloudFreshness),
+          if (CloudApiService.lastCommandId != null) ...[
+            SelectableText('Last command: ${CloudApiService.lastCommandId}'),
+            TextButton(
+              onPressed: router.pendingControlMac != null ? null : () async {
+                try {
+                  final result = await CloudApiService.commandStatus();
+                  if (!context.mounted) return;
+                  if (result['status'] == 'succeeded' && CloudApiService.lastCommandMac != null) {
+                    context.read<RouterDeviceProvider>().recordConfirmedControl(
+                      CloudApiService.lastCommandMac!, CloudApiService.lastCommandAction == 'block',
+                      completedAt: DateTime.tryParse(result['completed_at'] as String? ?? ''),
+                    );
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('Command: ${result['status']}. '
+                        'Only succeeded means Pi-confirmed enforcement. Unknown requires checking Pi/device state.'),
+                  ));
+                  context.read<RouterDeviceProvider>().refresh();
+                } catch (error) {
+                  if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$error')));
+                }
+              },
+              child: const Text('Check command status'),
+            ),
+          ],
+          if (foldDevices.isEmpty) const Text('No devices in this gateway snapshot yet.'),
+          const SizedBox(height: 12),
+      ],
       if (router.lastError != null)
         Padding(
           padding: const EdgeInsets.only(bottom: 16),
           child: Text(
-            'Router unreachable: ${router.lastError}',
+            '${RouterApiService.cloudMode ? "Cloud unavailable" : "Router unreachable"}: ${router.lastError}',
             style: const TextStyle(color: Colors.redAccent),
           ),
         ),
@@ -100,6 +133,11 @@ class DevicesScreen extends StatelessWidget {
   Widget _routerDeviceCard(BuildContext context, Map<String, dynamic> device) {
     final status = device['status'] as String? ?? 'SAFE';
     final mac = device['mac'] as String? ?? '';
+    final router = context.watch<RouterDeviceProvider>();
+    final cloud = RouterApiService.cloudMode;
+    final blocked = router.confirmedControls[mac] ?? (device['blocked'] == true || status == 'BLOCKED');
+    final canControl = !cloud || (!router.cloudDataStale && !CloudApiService.commandUnconfirmed &&
+        const {'owner', 'admin'}.contains(context.watch<AuthProvider>().householdRole));
     final colors = {
       'SAFE': Colors.green,
       'WARNING': Colors.orange,
@@ -128,9 +166,13 @@ class DevicesScreen extends StatelessWidget {
               ),
             ),
             const Divider(),
+            if (router.confirmedControls.containsKey(mac))
+              const Text('Pi confirmed the command; waiting for the next snapshot.'),
+            if (cloud && !const {'owner', 'admin'}.contains(context.watch<AuthProvider>().householdRole))
+              const Text('Read-only: owners/admins can control the network.'),
             Row(
               children: [
-                Expanded(
+                if (!cloud) Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () => _confirmDelete(context, device),
                     icon: const Icon(Icons.delete_outline),
@@ -140,9 +182,22 @@ class DevicesScreen extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: () {
+                    onPressed: !canControl || router.pendingControlMac != null ? null : () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: Text(blocked ? 'Unblock device?' : 'Block device?'),
+                          content: Text('${device['name'] ?? mac}\n$mac\n'
+                              'Only control devices on your Pi network. Blocking this phone can disconnect the app; keep another connection available to restore it.'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+                            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(blocked ? 'Unblock' : 'Block')),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true || !context.mounted) return;
                       final router = context.read<RouterDeviceProvider>();
-                      final operation = status == 'BLOCKED'
+                      final operation = blocked
                           ? router.unblock(mac)
                           : router.block(mac);
                       operation.then((_) {
@@ -150,9 +205,9 @@ class DevicesScreen extends StatelessWidget {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              status == 'BLOCKED'
+                              blocked
                                   ? 'Device unblocked.'
-                                  : 'Device blocked. Use the laptop website to restore this phone.',
+                                  : 'Pi confirmed blocking. Use a separate connection to restore this phone.',
                             ),
                           ),
                         );
@@ -164,10 +219,10 @@ class DevicesScreen extends StatelessWidget {
                       });
                     },
                     icon: Icon(
-                      status == 'BLOCKED' ? Icons.lock_open : Icons.block,
+                      blocked ? Icons.lock_open : Icons.block,
                     ),
                     label: Text(
-                      status == 'BLOCKED' ? 'Unblock' : 'Block',
+                      router.pendingControlMac == mac ? 'Waiting for Pi...' : blocked ? 'Unblock' : 'Block',
                     ),
                   ),
                 ),

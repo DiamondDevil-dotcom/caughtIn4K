@@ -10,6 +10,9 @@ import '../providers/alert_provider.dart';
 import '../providers/router_device_provider.dart';
 import 'auth_screen.dart';
 import 'navigation_screen.dart';
+import 'cloud_gateway_screen.dart';
+import '../services/cloud_api_service.dart';
+import 'email_verification_screen.dart';
 
 class AccountGate extends StatelessWidget {
   const AccountGate({super.key});
@@ -21,6 +24,12 @@ class AccountGate extends StatelessWidget {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (!auth.isSignedIn) return const AuthScreen();
+    if (CloudApiService.enabled && !auth.emailVerified) {
+      return const EmailVerificationScreen();
+    }
+    if (CloudApiService.enabled && !CloudApiService.selected) {
+      return const CloudGatewayScreen();
+    }
     if (auth.passwordFallbackForLaunch) return const NavigationScreen();
     return BiometricGate(key: ValueKey(auth.email));
   }

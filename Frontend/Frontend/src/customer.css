@@ -1,0 +1,12 @@
+.customer-app { max-width: 1000px; margin: auto; padding: 24px; color: #e9f2fa; }
+.customer-app header { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 24px; }
+.customer-panel { background: #111e2d; border: 1px solid #334558; border-radius: 16px; padding: 24px; margin: 18px 0; }
+.customer-app form { display: grid; gap: 14px; max-width: 480px; margin: 16px 0; }
+.customer-app label { display: grid; gap: 6px; }
+.customer-app input, .customer-app textarea, .customer-app select { color: #edf5fa; background: #08121d; padding: 12px; border: 1px solid #657587; border-radius: 8px; width: 100%; }
+.customer-app button { background: #187c72; color: white; border: 1px solid #6ca39e; border-radius: 8px; padding: 10px 16px; margin: 4px; cursor: pointer; }
+.customer-app button:disabled { opacity: .5; cursor: not-allowed; }
+.customer-app button:focus-visible, .customer-app input:focus-visible { outline: 3px solid #83d8fb; outline-offset: 3px; }
+.customer-device { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid #334558; }
+.customer-error { color: #ffb8b8; border-left: 4px solid #f56e6e; padding: 12px; }
+@media (max-width: 600px) { .customer-app { padding: 12px; } .customer-device { flex-wrap: wrap; } }

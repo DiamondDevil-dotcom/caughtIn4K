@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/activity_provider.dart';
 import '../providers/router_device_provider.dart';
 import '../widgets/liquid_glass_surface.dart';
+import '../services/router_api_service.dart';
 
 class ActivityScreen extends StatelessWidget {
   const ActivityScreen({super.key});
@@ -32,7 +33,8 @@ class ActivityScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          _liveActivity(fold.isEmpty ? null : fold.first),
+          if (!RouterApiService.cloudMode) _liveActivity(fold.isEmpty ? null : fold.first)
+          else Text(router.cloudFreshness),
           const SizedBox(height: 12),
           Text(
             "Recent Detections",
@@ -43,7 +45,7 @@ class ActivityScreen extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: Text(
-                "Router agent unreachable: ${activity.lastError}",
+                "${RouterApiService.cloudMode ? "Cloud unavailable" : "Router agent unreachable"}: ${activity.lastError}",
                 style: const TextStyle(color: Colors.redAccent),
               ),
             ),
@@ -83,7 +85,7 @@ class ActivityScreen extends StatelessWidget {
         Icons.radar;
     final timestamp = event["timestamp"] is num
         ? DateTime.fromMillisecondsSinceEpoch((event["timestamp"] as num).toInt() * 1000)
-        : null;
+        : event["timestamp"] is String ? DateTime.tryParse(event["timestamp"] as String)?.toLocal() : null;
     final time = timestamp == null
         ? "--"
         : "${timestamp.hour.toString().padLeft(2, '0')}:"
