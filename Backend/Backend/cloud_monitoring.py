@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
+import logging
 
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from cloud_database import connect
+from cloud_database import CloudDatabaseError, connect
+import cloud_push
 from cloud_gateways import secret_hash
 
 FRESHNESS_SECONDS = 90
@@ -111,6 +113,11 @@ def upload_snapshot(gateway_id: UUID, credential: str, snapshot: MonitoringSnaps
         connection.execute(
             "UPDATE caughtin4k.gateways SET last_seen_at = now() WHERE id = %s", (gateway_id,),
         )
+    if stored is not None:
+        try:
+            cloud_push.enqueue(gateway_id, snapshot)
+        except CloudDatabaseError:
+            logging.getLogger(__name__).error("Push enqueue unavailable; monitoring snapshot was saved.")
     return {"success": True, "snapshot_updated": stored is not None}
 
 

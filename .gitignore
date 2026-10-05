@@ -9,3 +9,6 @@ venv*/
 node_modules/
 dist/
 .DS_Store
+Sentra/android/app/google-services.json
+firebase-service-account*.json
+*firebase-adminsdk*.json

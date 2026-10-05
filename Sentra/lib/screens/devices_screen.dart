@@ -67,6 +67,11 @@ class DevicesScreen extends StatelessWidget {
       ),
       if (RouterApiService.cloudMode) ...[
         Text(router.cloudFreshness),
+        if (router.notificationError != null)
+          Text(
+            router.notificationError!,
+            style: const TextStyle(color: Colors.orange),
+          ),
         if (CloudApiService.commandUnconfirmed) ...[
           TextButton(
             onPressed: router.pendingControlMac != null
@@ -275,6 +280,12 @@ class DevicesScreen extends StatelessWidget {
               ),
             ),
             const Divider(),
+            if (cloud &&
+                router.recentWarnings.any((event) => event['mac'] == mac))
+              const Text(
+                'Recent WARNING detected on this device (last 60 seconds).',
+                style: TextStyle(color: Colors.orange),
+              ),
             if (router.confirmedControls.containsKey(mac))
               const Text('Device action confirmed. Updating…'),
             if (cloud &&

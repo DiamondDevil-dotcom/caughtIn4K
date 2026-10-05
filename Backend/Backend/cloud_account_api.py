@@ -18,6 +18,7 @@ import cloud_households as households
 import cloud_monitoring as monitoring
 import cloud_commands as commands
 import cloud_account_security as security
+import cloud_push
 from cloud_database import CloudDatabaseError
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,14 @@ def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
     async def list_households(account=Depends(current_account)):
         rows = await operation(accounts.memberships, account["id"])
         return {"households": rows}
+
+    @router.post("/push/register")
+    async def register_push(payload: cloud_push.RegistrationInput, account=Depends(current_account)):
+        return await operation(cloud_push.register, account, payload)
+
+    @router.post("/push/unregister")
+    async def unregister_push(payload: cloud_push.InstallationInput):
+        return await operation(cloud_push.unregister, payload)
 
     @router.post("/gateways/pair", status_code=201)
     async def pair_gateway(payload: PairGatewayInput, account=Depends(current_account)):

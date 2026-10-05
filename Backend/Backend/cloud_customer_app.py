@@ -2,6 +2,8 @@
 
 import logging
 import os
+import asyncio
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
@@ -13,6 +15,7 @@ from cloud_account_api import build_router
 from cloud_account_security import limit, mail_settings
 from cloud_database import CloudDatabaseError
 from fastapi import HTTPException
+import cloud_push
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,22 @@ def create_app() -> FastAPI:
         uri = urlsplit(origin)
         if uri.scheme != "https" or not uri.hostname or "*" in origin or uri.username or uri.password or uri.query or uri.fragment or uri.path:
             raise ValueError("Configure exact HTTPS website origins, without paths or wildcards.")
-    app = FastAPI(title="caughtIn4K", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(app):
+        stop = asyncio.Event()
+        push_task = None
+        if cloud_push.enabled():
+            firebase = await asyncio.to_thread(cloud_push.configure)
+            push_task = asyncio.create_task(cloud_push.worker(firebase, stop))
+        try:
+            yield
+        finally:
+            stop.set()
+            if push_task is not None:
+                await push_task
+
+    app = FastAPI(title="caughtIn4K", docs_url=None, redoc_url=None,
+                  openapi_url=None, lifespan=lifespan)
 
     @app.middleware("http")
     async def protect_requests(request: Request, call_next):

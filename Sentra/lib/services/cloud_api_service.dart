@@ -182,6 +182,11 @@ class CloudApiService {
         throw Exception('Cloud session or gateway changed.');
       }
       if (response.statusCode != expected) {
+        if (path == '/cloud/auth/signup' && response.statusCode == 409) {
+          throw Exception(
+            'An account with this email already exists. Sign in, or use Forgot password. To test isolation, use an email that has not been registered.',
+          );
+        }
         throw CloudRequestException(response.statusCode);
       }
       final decoded = jsonDecode(response.body);

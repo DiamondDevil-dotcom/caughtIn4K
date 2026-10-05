@@ -1,8 +1,11 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/push_notification_service.dart';
 
 class AlertProvider extends ChangeNotifier {
   Map<String, dynamic>? result;
@@ -13,7 +16,6 @@ class AlertProvider extends ChangeNotifier {
   Timer? _pollingTimer;
 
   AlertProvider() {
-    NotificationService.initialize();
     _loadNotificationPreference();
   }
 
@@ -24,6 +26,8 @@ class AlertProvider extends ChangeNotifier {
   }
 
   Future<void> setNotificationsEnabled(bool value) async {
+    if (value) await NotificationService.initialize();
+    await PushNotificationService.sync(enabled: value);
     notificationsEnabled = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool("notificationsEnabled", value);
@@ -58,16 +62,14 @@ class AlertProvider extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>> scanNetwork(List<String> deviceNames) async {
-    final response = await ApiService.scanNetwork(
-      deviceNames,
+    final response = await ApiService.scanNetwork(deviceNames);
+    final allResults = List<Map<String, dynamic>>.from(
+      response["devices"] ?? [],
     );
-    final allResults = List<Map<String, dynamic>>.from(response["devices"] ?? []);
     final liveResults = allResults
-      .where((item) => item["timestamp"] != null)
-      .toList();
-    final results = liveResults.isNotEmpty
-      ? liveResults
-      : allResults;
+        .where((item) => item["timestamp"] != null)
+        .toList();
+    final results = liveResults.isNotEmpty ? liveResults : allResults;
     scanResults = results;
     if (results.isNotEmpty) {
       final withData = results.where((item) => item["timestamp"] != null);

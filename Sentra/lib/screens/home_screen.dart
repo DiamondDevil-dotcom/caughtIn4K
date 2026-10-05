@@ -313,6 +313,29 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 12),
             Text(provider.cloudFreshness),
+            if (provider.notificationError != null)
+              Text(
+                provider.notificationError!,
+                style: const TextStyle(color: Colors.orange),
+              ),
+            ...provider.recentWarnings.map((event) {
+              final matching = devices.where(
+                (device) => device['mac'] == event['mac'],
+              );
+              final name = matching.isEmpty
+                  ? event['mac']
+                  : matching.first['name'] ?? event['mac'];
+              return ListTile(
+                leading: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.orange,
+                ),
+                title: Text('Recent WARNING: $name'),
+                subtitle: const Text(
+                  'Detected in the last 60 seconds. Current device status is shown separately.',
+                ),
+              );
+            }),
             const SizedBox(height: 20),
             Card(
               child: Padding(

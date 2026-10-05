@@ -1,44 +1,66 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter/foundation.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
+  static Future<void>? _initializing;
 
   static Future<void> initialize() async {
-    if (_initialized) return;
-
-    try {
-      const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-      const settings = InitializationSettings(android: android);
-      await _plugin.initialize(settings);
-
-      final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      await androidPlugin?.requestNotificationsPermission();
-      await androidPlugin?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          'caughtin4k_threats',
-          'Threat alerts',
-          description: 'Real-time caughtIn4K intrusion alerts',
-          importance: Importance.max,
-        ),
-      );
-      _initialized = true;
-    } catch (_) {
-      // Desktop and widget-test platforms do not expose Android notifications.
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        _initialized) {
+      return;
     }
+    if (_initializing != null) return _initializing;
+    final initialization = _initializeAndroid();
+    _initializing = initialization;
+    try {
+      await initialization;
+    } finally {
+      _initializing = null;
+    }
+  }
+
+  static Future<void> _initializeAndroid() async {
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const settings = InitializationSettings(android: android);
+    await _plugin.initialize(settings);
+
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (androidPlugin == null) {
+      throw StateError('Android notification plugin is unavailable.');
+    }
+    final permitted = await androidPlugin.requestNotificationsPermission();
+    if (permitted != true) {
+      throw StateError('Allow notifications in Android app settings.');
+    }
+    await androidPlugin.createNotificationChannel(
+      const AndroidNotificationChannel(
+        'caughtin4k_threats',
+        'Threat alerts',
+        description: 'Real-time caughtIn4K intrusion alerts',
+        importance: Importance.max,
+      ),
+    );
+    _initialized = true;
   }
 
   static Future<void> showThreat({
     required String device,
     required String attack,
     required num confidence,
+    int? notificationId,
   }) async {
     await initialize();
     if (!_initialized) return;
     await _plugin.show(
-      DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+      notificationId ??
+          DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
       'Threat detected',
       '$device: $attack (${confidence.toStringAsFixed(1)}% confidence)',
       const NotificationDetails(
@@ -60,11 +82,17 @@ class NotificationService {
     required String status,
     required String prediction,
     required num confidence,
+    int? notificationId,
   }) async {
     await initialize();
     if (!_initialized) return;
 
-    final isAlert = status == "ALERT" || status == "BLOCKED";
+    final isAlert = const {
+      'WARNING',
+      'ATTACK',
+      'ALERT',
+      'BLOCKED',
+    }.contains(status);
     final title = switch (status) {
       "ALERT" => "Threat detected",
       "BLOCKED" => "Device blocked",
@@ -73,7 +101,8 @@ class NotificationService {
       _ => "Traffic status updated",
     };
     await _plugin.show(
-      DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+      notificationId ??
+          DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
       title,
       '$device: $prediction (${confidence.toStringAsFixed(1)}% confidence)',
       NotificationDetails(

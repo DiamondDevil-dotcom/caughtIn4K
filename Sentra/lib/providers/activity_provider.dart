@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/router_api_service.dart';
@@ -11,43 +12,38 @@ class ActivityProvider extends ChangeNotifier {
   Timer? _pollingTimer;
   bool _fetching = false;
   bool _disposed = false;
-  DateTime? _lastCloudFetch;
 
   void clearCachedData() {
     events = [];
     lastError = null;
-    _lastCloudFetch = null;
     notifyListeners();
   }
 
   void startPolling() {
     _fetch();
     _pollingTimer ??= Timer.periodic(
-      const Duration(seconds: 4),
+      const Duration(seconds: 2),
       (_) => _fetch(),
     );
   }
 
   Future<void> _fetch() async {
     if (_disposed || _fetching || !RouterApiService.hasSession) return;
-    if (RouterApiService.cloudMode && _lastCloudFetch != null &&
-        DateTime.now().difference(_lastCloudFetch!).inSeconds < 15) {
-      return;
-    }
-    _lastCloudFetch = RouterApiService.cloudMode ? DateTime.now() : null;
     _fetching = true;
     final requestedUrl = RouterApiService.baseUrl;
     final requestedSession = RouterApiService.sessionGeneration;
     try {
       final fetched = await RouterApiService.events();
-      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+      if (_disposed ||
+          requestedUrl != RouterApiService.baseUrl ||
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }
       events = fetched;
       lastError = null;
     } catch (error) {
-      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+      if (_disposed ||
+          requestedUrl != RouterApiService.baseUrl ||
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }

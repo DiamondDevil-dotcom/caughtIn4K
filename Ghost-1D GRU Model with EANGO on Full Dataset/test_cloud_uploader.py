@@ -95,10 +95,25 @@ class UploaderTests(unittest.TestCase):
         ):
             with self.assertRaises(uploader.PermanentUploadError):
                 uploader.run(self.config)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 30])
+        self.assertEqual(sleep.call_args_list[0].args[0], 2)
+        self.assertLessEqual(sleep.call_args_list[1].args[0], 2)
         with patch.object(uploader.random, "uniform", return_value=0):
             self.assertEqual(uploader.retry_delay(2, 30), 60)
             self.assertEqual(uploader.retry_delay(1000, 30), 300)
+
+    def test_fast_upload_cadence_is_bounded_and_accounts_for_request_time(self):
+        self.assertEqual(self.config.interval, 2)
+        for interval in (0, 1, 61):
+            with self.assertRaises(ValueError):
+                replace(self.config, interval=interval)
+        with (
+            patch.object(uploader, "upload_once", side_effect=[None, uploader.PermanentUploadError("stop")]),
+            patch.object(uploader.time, "monotonic", side_effect=[10, 10.75, 12]),
+            patch.object(uploader.time, "sleep") as sleep,
+        ):
+            with self.assertRaises(uploader.PermanentUploadError):
+                uploader.run(self.config)
+        sleep.assert_called_once_with(1.25)
 
     def test_401_diagnostics_only_expose_allowlisted_reason(self):
         for detail, expected in (

@@ -67,6 +67,67 @@ void main() {
     );
   }
 
+  testWidgets(
+    'parallel device warnings remain visible after one device blocks',
+    (tester) async {
+      const second = '11:22:33:44:55:66';
+      router.devices.single['status'] = 'BLOCKED';
+      router.devices.single['blocked'] = true;
+      router.devices.add({
+        'mac': second,
+        'name': 'Second phone',
+        'status': 'SAFE',
+        'blocked': false,
+      });
+      await mount(tester, 'owner');
+      final timestamp = DateTime.now()
+          .subtract(const Duration(seconds: 3))
+          .toUtc()
+          .toIso8601String();
+      final alerts = [
+        {
+          'event_id': 1,
+          'mac': 'aa:bb:cc:dd:ee:ff',
+          'status': 'WARNING',
+          'timestamp': timestamp,
+        },
+        {
+          'event_id': 2,
+          'mac': 'aa:bb:cc:dd:ee:ff',
+          'status': 'BLOCKED',
+          'timestamp': timestamp,
+        },
+        {
+          'event_id': 3,
+          'mac': second,
+          'status': 'WARNING',
+          'timestamp': timestamp,
+        },
+      ];
+      CloudApiService.lastSnapshot!['alerts'] = alerts;
+      router.notifyListeners();
+      await tester.pump();
+      expect(router.recentWarnings.length, 2);
+      expect(
+        find.text('Recent WARNING detected on this device (last 60 seconds).'),
+        findsNWidgets(2),
+      );
+      expect(find.text('BLOCKED'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Unblock'), findsOneWidget);
+      await mount(tester, 'owner', screen: const HomeScreen());
+      CloudApiService.lastSnapshot!['alerts'] = alerts;
+      router.notifyListeners();
+      await tester.pump();
+      expect(find.text('Recent WARNING: Test phone'), findsOneWidget);
+      expect(find.text('Recent WARNING: Second phone'), findsOneWidget);
+      CloudApiService.lastSnapshot!['data_stale'] = true;
+      router.notifyListeners();
+      await tester.pump();
+      expect(router.recentWarnings, isEmpty);
+      expect(find.textContaining('Recent WARNING:'), findsNothing);
+    },
+  );
+
   testWidgets('members can see devices but cannot block or remove', (
     tester,
   ) async {

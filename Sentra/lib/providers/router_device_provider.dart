@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/notification_service.dart';
 import '../services/router_api_service.dart';
 import '../services/cloud_api_service.dart';
+import '../services/push_notification_service.dart';
 
 /// Polls the Pi's router-mode IDS agent for live per-device status
 /// (SAFE / WARNING / ALERT / BLOCKED) and exposes block/unblock actions.
@@ -24,11 +26,39 @@ class RouterDeviceProvider extends ChangeNotifier {
   bool _fetchingDevices = false;
   bool _fetchingFederatedStatus = false;
   bool _disposed = false;
-  DateTime? _lastCloudFetch;
   String? pendingControlMac;
   final Map<String, bool> confirmedControls = {};
   final Map<String, DateTime> _confirmedAt = {};
   final Map<String, DateTime> _removedAt = {};
+  final Set<int> _notifiedCloudEvents = {};
+  String? notificationError;
+
+  List<Map<String, dynamic>> get recentWarnings {
+    if (cloudDataStale) return [];
+    final now = DateTime.now();
+    final visible = displayedDevices.map((device) => device['mac']).toSet();
+    final warnings = <String, Map<String, dynamic>>{};
+    for (final event in CloudApiService.rows(
+      CloudApiService.lastSnapshot?['alerts'] ?? [],
+    )) {
+      final mac = event['mac'];
+      final timestamp = DateTime.tryParse(event['timestamp'] as String? ?? '');
+      if (mac is! String ||
+          !visible.contains(mac) ||
+          event['status'] != 'WARNING' ||
+          timestamp == null ||
+          timestamp.isAfter(now) ||
+          now.difference(timestamp).inSeconds >= 60) {
+        continue;
+      }
+      final previous = warnings[mac];
+      if (previous == null ||
+          timestamp.isAfter(DateTime.parse(previous['timestamp'] as String))) {
+        warnings[mac] = event;
+      }
+    }
+    return warnings.values.toList();
+  }
 
   List<Map<String, dynamic>> get displayedDevices => devices
       .where((device) => !_removedAt.containsKey(device['mac']))
@@ -104,7 +134,7 @@ class RouterDeviceProvider extends ChangeNotifier {
 
   String get cloudFreshness => cloudDataStale
       ? 'Your home is offline or updates are delayed. Showing the last update.'
-      : 'Your home is connected. Updates may take up to 30 seconds.';
+      : 'Your home is connected. Checking updates every 2 seconds.';
 
   void clearCachedData() {
     devices = [];
@@ -117,7 +147,8 @@ class RouterDeviceProvider extends ChangeNotifier {
     confirmedControls.clear();
     _confirmedAt.clear();
     _removedAt.clear();
-    _lastCloudFetch = null;
+    _notifiedCloudEvents.clear();
+    notificationError = null;
     notifyListeners();
   }
 
@@ -135,7 +166,6 @@ class RouterDeviceProvider extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
-    _lastCloudFetch = null;
     await _fetch();
   }
 
@@ -202,13 +232,6 @@ class RouterDeviceProvider extends ChangeNotifier {
 
   Future<void> _fetch() async {
     if (_disposed || _fetchingDevices || !RouterApiService.hasSession) return;
-    if (RouterApiService.cloudMode &&
-        _lastCloudFetch != null &&
-        DateTime.now().difference(_lastCloudFetch!).inSeconds < 15) {
-      notifyListeners();
-      return;
-    }
-    _lastCloudFetch = RouterApiService.cloudMode ? DateTime.now() : null;
     _fetchingDevices = true;
     final requestedUrl = RouterApiService.baseUrl;
     final requestedSession = RouterApiService.sessionGeneration;
@@ -221,6 +244,11 @@ class RouterDeviceProvider extends ChangeNotifier {
       }
       if (!RouterApiService.cloudMode) _notifyOnChanges(fetched);
       if (RouterApiService.cloudMode) {
+        await _notifyCloudEvents(fetched, requestedSession);
+        if (_disposed ||
+            requestedSession != RouterApiService.sessionGeneration) {
+          return;
+        }
         federatedStatus = {
           'cloud_model': CloudApiService.lastSnapshot?['model'],
         };
@@ -285,6 +313,84 @@ class RouterDeviceProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> _notifyCloudEvents(
+    List<Map<String, dynamic>> fetched,
+    int version,
+  ) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (_disposed || version != RouterApiService.sessionGeneration) return;
+    final enabled = preferences.getBool('notificationsEnabled') ?? true;
+    final events =
+        CloudApiService.rows(CloudApiService.lastSnapshot?['alerts'] ?? [])
+            .toList()
+          ..sort(
+            (a, b) => (a['event_id'] as int).compareTo(b['event_id'] as int),
+          );
+    final now = DateTime.now();
+    for (final event in events) {
+      final id = event['event_id'] as int;
+      if (_notifiedCloudEvents.contains(id)) continue;
+      final timestamp = DateTime.parse(event['timestamp'] as String);
+      if (!enabled ||
+          cloudDataStale ||
+          now.difference(timestamp).inSeconds > 60 ||
+          timestamp.isAfter(now) ||
+          !const {
+            'WARNING',
+            'ATTACK',
+            'ALERT',
+            'BLOCKED',
+          }.contains(event['status'])) {
+        _notifiedCloudEvents.add(id);
+        continue;
+      }
+      final matches = fetched.where((device) => device['mac'] == event['mac']);
+      if (matches.isEmpty || _removedAt.containsKey(event['mac'])) {
+        _notifiedCloudEvents.add(id);
+        continue;
+      }
+      final name = matches.first['name'] as String? ?? event['mac'] as String;
+      try {
+        final gateway = CloudApiService.gatewayId;
+        final eventKey = '$id:${timestamp.millisecondsSinceEpoch}';
+        final delivered =
+            gateway != null &&
+            await PushNotificationService.wasDelivered(gateway, eventKey);
+        if (!delivered) {
+          await NotificationService.showStatus(
+            device: name,
+            status: event['status'] as String,
+            prediction: 'Detected ${event['status']}',
+            confidence: event['attack_probability'] as num,
+            notificationId: id.remainder(1 << 31),
+          );
+          if (gateway != null) {
+            await PushNotificationService.recordDelivered({
+              'gateway_id': gateway,
+              'event_key': eventKey,
+            });
+          }
+        }
+      } catch (error) {
+        notificationError = 'Phone notifications unavailable: $error';
+        return;
+      }
+      if (_disposed || version != RouterApiService.sessionGeneration) return;
+      notificationError = null;
+      _notifiedCloudEvents.add(id);
+      notifications.insert(0, {
+        'device': name,
+        'status': event['status'],
+        'prediction': 'Detected ${event['status']}',
+        'confidence': event['attack_probability'],
+        'timestamp': event['timestamp'],
+      });
+      if (notifications.length > 30) notifications.removeLast();
+    }
+    final retained = events.map((event) => event['event_id'] as int).toSet();
+    _notifiedCloudEvents.removeWhere((id) => !retained.contains(id));
+  }
+
   Future<void> block(String mac) async {
     await _control(mac, true);
   }
@@ -318,7 +424,6 @@ class RouterDeviceProvider extends ChangeNotifier {
           ),
         );
       }
-      _lastCloudFetch = null;
       await _fetch();
     } finally {
       pendingControlMac = null;
@@ -346,7 +451,6 @@ class RouterDeviceProvider extends ChangeNotifier {
       if (version != RouterApiService.sessionGeneration) {
         throw Exception('Home changed. Check command status.');
       }
-      _lastCloudFetch = null;
       await _fetch();
     } finally {
       pendingControlMac = null;

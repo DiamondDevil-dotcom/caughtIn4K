@@ -22,9 +22,15 @@ class SettingsScreen extends StatelessWidget {
     final demoModeProvider = context.watch<DemoModeProvider>();
     final authProvider = context.watch<AuthProvider>();
     final routerProvider = context.watch<RouterDeviceProvider>();
-    final canManageHousehold = const {'owner', 'admin'}.contains(authProvider.householdRole);
+    final canManageHousehold = const {
+      'owner',
+      'admin',
+    }.contains(authProvider.householdRole);
     final recentNotifications =
-        [if (!RouterApiService.cloudMode) ...alertProvider.notifications, ...routerProvider.notifications]..sort(
+        [
+          if (!RouterApiService.cloudMode) ...alertProvider.notifications,
+          ...routerProvider.notifications,
+        ]..sort(
           (a, b) =>
               (b['timestamp'] as String).compareTo(a['timestamp'] as String),
         );
@@ -49,7 +55,9 @@ class SettingsScreen extends StatelessWidget {
               child: ListTile(
                 leading: const Icon(Icons.router_outlined),
                 title: const Text('Claim gateway'),
-                subtitle: const Text('Enter the one-time setup code from your Pi'),
+                subtitle: const Text(
+                  'Enter the one-time setup code from your Pi',
+                ),
                 onTap: () => _showClaimGateway(context),
               ),
             )
@@ -83,31 +91,33 @@ class SettingsScreen extends StatelessWidget {
           ),
 
           const SizedBox(height: 15),
-          LiquidGlassSurface(child: ListTile(
-            leading: const Icon(Icons.cloud_outlined),
-            title: const Text('Your home'),
-            subtitle: Text(CloudApiService.gatewayName ?? 'Home'),
-            onTap: () {
-              context.read<RouterDeviceProvider>().clearCachedData();
-              context.read<ActivityProvider>().clearCachedData();
-              context.read<AuthProvider>().chooseAnotherHome();
-            },
-          )),
-          const SizedBox(height: 15),
-          if (!RouterApiService.cloudMode)
           LiquidGlassSurface(
             child: ListTile(
-              leading: const Icon(Icons.cloud_sync_outlined),
-              title: const Text('Gateway / Server URL'),
-              subtitle: Text(
-                RouterApiService.baseUrl,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-              onTap: () => _showServerSettings(context),
+              leading: const Icon(Icons.cloud_outlined),
+              title: const Text('Your home'),
+              subtitle: Text(CloudApiService.gatewayName ?? 'Home'),
+              onTap: () {
+                context.read<RouterDeviceProvider>().clearCachedData();
+                context.read<ActivityProvider>().clearCachedData();
+                context.read<AuthProvider>().chooseAnotherHome();
+              },
             ),
           ),
+          const SizedBox(height: 15),
+          if (!RouterApiService.cloudMode)
+            LiquidGlassSurface(
+              child: ListTile(
+                leading: const Icon(Icons.cloud_sync_outlined),
+                title: const Text('Gateway / Server URL'),
+                subtitle: Text(
+                  RouterApiService.baseUrl,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                onTap: () => _showServerSettings(context),
+              ),
+            ),
 
           const SizedBox(height: 20),
 
@@ -127,17 +137,29 @@ class SettingsScreen extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          if (!RouterApiService.cloudMode) LiquidGlassSurface(
+          LiquidGlassSurface(
             child: SwitchListTile(
               secondary: const Icon(Icons.notifications_none),
               title: const Text("Live notifications"),
               subtitle: Text(
                 alertProvider.notificationsEnabled
-                    ? "Global model alerts are enabled"
-                    : "Global model alerts are muted",
+                    ? "Device threat alerts are enabled while the app is running"
+                    : "Device threat alerts are muted",
               ),
               value: alertProvider.notificationsEnabled,
-              onChanged: alertProvider.setNotificationsEnabled,
+              onChanged: (value) async {
+                try {
+                  await alertProvider.setNotificationsEnabled(value);
+                } catch (error) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Could not enable notifications: $error'),
+                      ),
+                    );
+                  }
+                }
+              },
             ),
           ),
 
@@ -209,17 +231,18 @@ class SettingsScreen extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          if (!RouterApiService.cloudMode) LiquidGlassSurface(
-            child: SwitchListTile(
-              secondary: const Icon(Icons.science_outlined),
-              title: const Text("Demo Mode"),
-              subtitle: const Text(
-                "Show demonstration controls to send test traffic",
+          if (!RouterApiService.cloudMode)
+            LiquidGlassSurface(
+              child: SwitchListTile(
+                secondary: const Icon(Icons.science_outlined),
+                title: const Text("Demo Mode"),
+                subtitle: const Text(
+                  "Show demonstration controls to send test traffic",
+                ),
+                value: demoModeProvider.enabled,
+                onChanged: demoModeProvider.setEnabled,
               ),
-              value: demoModeProvider.enabled,
-              onChanged: demoModeProvider.setEnabled,
             ),
-          ),
         ],
       ),
     );
@@ -241,7 +264,9 @@ class SettingsScreen extends StatelessWidget {
         title: const Text('Claim this gateway'),
         content: TextField(
           controller: code,
-          decoration: const InputDecoration(labelText: 'One-time Pi setup code'),
+          decoration: const InputDecoration(
+            labelText: 'One-time Pi setup code',
+          ),
         ),
         actions: [
           TextButton(
@@ -250,11 +275,15 @@ class SettingsScreen extends StatelessWidget {
           ),
           FilledButton(
             onPressed: () async {
-              final error = await context.read<AuthProvider>().claimGateway(code.text);
+              final error = await context.read<AuthProvider>().claimGateway(
+                code.text,
+              );
               if (!dialogContext.mounted) return;
               Navigator.pop(dialogContext);
               messenger.showSnackBar(
-                SnackBar(content: Text(error ?? 'Gateway claimed for this household.')),
+                SnackBar(
+                  content: Text(error ?? 'Gateway claimed for this household.'),
+                ),
               );
             },
             child: const Text('Claim gateway'),
@@ -288,15 +317,25 @@ class SettingsScreen extends StatelessWidget {
                 initialValue: role,
                 decoration: const InputDecoration(labelText: 'Role'),
                 items: [
-                  const DropdownMenuItem(value: 'member', child: Text('Member')),
+                  const DropdownMenuItem(
+                    value: 'member',
+                    child: Text('Member'),
+                  ),
                   if (context.read<AuthProvider>().householdRole == 'owner')
-                    const DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                    const DropdownMenuItem(
+                      value: 'admin',
+                      child: Text('Admin'),
+                    ),
                 ],
                 onChanged: (value) {
                   if (value != null) setDialogState(() => role = value);
                 },
               ),
-              if (error != null) Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              if (error != null)
+                Text(
+                  error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               if (inviteCode != null) ...[
                 const SizedBox(height: 12),
                 const Text('Share this code with the invited account:'),
@@ -332,11 +371,18 @@ class SettingsScreen extends StatelessWidget {
                     if (!dialogContext.mounted) return;
                     setDialogState(() {
                       inviteCode = result['invite_code'] as String?;
-                      error = inviteCode == null ? 'The server did not return an invitation code.' : null;
+                      error = inviteCode == null
+                          ? 'The server did not return an invitation code.'
+                          : null;
                     });
                   } catch (exception) {
                     if (dialogContext.mounted) {
-                      setDialogState(() => error = exception.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+                      setDialogState(
+                        () => error = exception.toString().replaceFirst(
+                          RegExp(r'^Exception:\s*'),
+                          '',
+                        ),
+                      );
                     }
                   }
                 },
@@ -396,7 +442,9 @@ class SettingsScreen extends StatelessWidget {
                 current.text,
                 next.text,
               );
-              if (error == null && RouterApiService.cloudMode && context.mounted) {
+              if (error == null &&
+                  RouterApiService.cloudMode &&
+                  context.mounted) {
                 await context.read<AuthProvider>().signOut();
               }
               if (!dialogContext.mounted) return;

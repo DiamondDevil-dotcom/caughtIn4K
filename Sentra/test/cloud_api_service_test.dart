@@ -2,14 +2,19 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nyxis_security/services/cloud_api_service.dart';
 import 'package:nyxis_security/services/router_api_service.dart';
 import 'package:nyxis_security/providers/router_device_provider.dart';
+import 'package:nyxis_security/providers/activity_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   const mac = 'aa:bb:cc:dd:ee:ff';
   Map<String, dynamic> snapshot({bool stale = false}) => {
     'gateway_id': 'gateway-a',
@@ -51,6 +56,148 @@ void main() {
   });
 
   tearDown(CloudApiService.disable);
+
+  test(
+    'signup conflict explains existing email instead of network commands',
+    () async {
+      await http.runWithClient(
+        () async {
+          await expectLater(
+            CloudApiService.signup(
+              'Test',
+              'second@example.invalid',
+              'test-password',
+            ),
+            throwsA(
+              predicate(
+                (error) =>
+                    error.toString().contains('email already exists') &&
+                    !error.toString().contains('command status'),
+              ),
+            ),
+          );
+        },
+        () => MockClient(
+          (request) async => http.Response(
+            '{"detail":"An account with this email already exists."}',
+            409,
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'Activity refreshes events every two seconds without a 15-second gate',
+    () async {
+      select();
+      final activity = ActivityProvider();
+      var reads = 0;
+      try {
+        await http.runWithClient(
+          () async {
+            activity.startPolling();
+            await Future<void>.delayed(const Duration(milliseconds: 2300));
+            expect(reads, 2);
+            expect(activity.events.single['status'], 'WARNING');
+          },
+          () => MockClient((request) async {
+            reads++;
+            return http.Response(
+              jsonEncode({
+                ...snapshot(),
+                'alerts': [
+                  {
+                    'event_id': reads,
+                    'mac': mac,
+                    'status': 'WARNING',
+                    'attack_probability': 90,
+                    'timestamp': DateTime.now().toUtc().toIso8601String(),
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+        );
+      } finally {
+        activity.dispose();
+      }
+    },
+  );
+
+  test('cloud warning and block events notify once per event across parallel devices', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    AndroidFlutterLocalNotificationsPlugin.registerWith();
+    select();
+    const channel = MethodChannel('dexterous.com/flutter/local_notifications');
+    final delivered = <Map<dynamic, dynamic>>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'show') delivered.add(call.arguments as Map);
+          return true;
+        });
+    final router = RouterDeviceProvider();
+    final data = snapshot();
+    final timestamp = DateTime.now().toUtc().toIso8601String();
+    (data['devices'] as List).add({
+      'mac': '11:22:33:44:55:66',
+      'name': 'Second phone',
+      'status': 'SAFE',
+      'blocked': false,
+    });
+    data['alerts'] = [
+      {
+        'event_id': 1,
+        'mac': mac,
+        'status': 'WARNING',
+        'attack_probability': 90,
+        'timestamp': timestamp,
+      },
+      {
+        'event_id': 2,
+        'mac': mac,
+        'status': 'BLOCKED',
+        'attack_probability': 95,
+        'timestamp': timestamp,
+      },
+      {
+        'event_id': 3,
+        'mac': '11:22:33:44:55:66',
+        'status': 'WARNING',
+        'attack_probability': 89,
+        'timestamp': timestamp,
+      },
+    ];
+    try {
+      await http.runWithClient(
+        () async {
+          await router.refresh();
+          await router.refresh();
+          expect(router.lastError, isNull);
+          expect(router.notificationError, isNull);
+          expect(delivered.length, 3);
+          expect(delivered.map((item) => item['id']).toSet().length, 3);
+          expect(router.notifications.length, 3);
+          expect(router.notificationError, isNull);
+          router.clearCachedData();
+          SharedPreferences.setMockInitialValues({
+            'notificationsEnabled': false,
+          });
+          await router.refresh();
+          expect(delivered.length, 3);
+          expect(router.notifications, isEmpty);
+        },
+        () =>
+            MockClient((request) async => http.Response(jsonEncode(data), 200)),
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      router.dispose();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    }
+  });
 
   test(
     'staging tokens and cloud sessions are never saved to preferences',
@@ -144,6 +291,40 @@ void main() {
       }),
     );
   });
+
+  test(
+    'two-second polling refreshes multiple devices in one request',
+    () async {
+      select();
+      var requests = 0;
+      final router = RouterDeviceProvider();
+      try {
+        await http.runWithClient(
+          () async {
+            router.startPolling();
+            await Future<void>.delayed(const Duration(milliseconds: 2300));
+            expect(requests, 2);
+            expect(router.devices.length, 2);
+          },
+          () => MockClient((request) async {
+            expect(request.url.path.endsWith('/snapshot'), isTrue);
+            requests++;
+            final data = snapshot();
+            (data['devices'] as List).add({
+              'mac': '11:22:33:44:55:66',
+              'name': 'Second phone',
+              'status': 'WARNING',
+              'blocked': false,
+              'attack_probability': 90,
+            });
+            return http.Response(jsonEncode(data), 200);
+          }),
+        );
+      } finally {
+        router.dispose();
+      }
+    },
+  );
 
   test('control waits for Pi acknowledgement; queued is not success', () async {
     select();

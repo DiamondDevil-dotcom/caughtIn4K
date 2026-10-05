@@ -22,7 +22,7 @@ automatically; **Your home / Manage homes** allows selecting or adding homes.
 Building locally does not deploy the customer app, website, backend, or Pi
 worker. Use the following deliberate rollout for a new installation or update:
 
-1. Apply schema version **5** with the private `cloud_database.py init` command
+1. Apply schema version **6** with the private `cloud_database.py init` command
    below, then run `cloud_database.py check`. This is additive: accounts,
    password hashes, memberships, gateways and Pi data are retained. Existing
    accounts are **not** falsely marked email-verified; they confirm their email
@@ -137,6 +137,90 @@ synchronized with a later cloud password reset. A timeout is a connectivity
 failure, not an invalid-password response: check the original gateway and
 Pi tunnel, then retry only after connectivity returns. A health response
 alone does not prove login forwarding; validate the actual login round-trip.
+
+### Low-latency monitoring and brief warnings
+
+The uploader defaults to a 2-second cadence, configurable with
+`GHOST_CLOUD_UPLOAD_INTERVAL` (2-60 seconds). The active mobile Devices/Home
+provider and website poll every 2 seconds, fetching all devices together rather
+than making one request per device. Requests never overlap within a poller.
+Successful uploads subtract request duration from the next wait; failures still
+back off. Network/hosting delays remain possible: this is not a hard real-time
+guarantee. Under normal connectivity, two polling stages add up to roughly
+4 seconds plus request latency instead of the old 30+15 second waits.
+
+Home and Devices also show **Recent WARNING** from real Pi event history for
+60 seconds, independently per MAC. This preserves brief warnings even if the
+current state has already become BLOCKED or SAFE. It does not relabel the
+current state, delay firewall enforcement, or alter model thresholds. Stale
+snapshots and removed devices do not show these banners; Activity retains the
+actual transition history. Validate using two registered devices sending
+samples concurrently and measure sender acknowledgement-to-display latency.
+
+Deploy the updated `cloud_uploader.py` to the Pi and restart only the uploader
+service after syntax validation; no router/training restart is needed.
+Rebuild/install the mobile app and publish the rebuilt website. The backend
+snapshot contract and database schema are unchanged.
+
+Activity polls every 2 seconds as well. While the app is running, fresh Pi
+WARNING/ATTACK/ALERT/BLOCKED events generate Android notifications once per
+event, independently per device, including transitions missed between snapshots.
+Old events are not replayed on login. The Settings notification toggle applies
+to cloud events; permission/plugin failures are shown on Home and Devices.
+Closed-app/locked-phone delivery uses the separately enabled Firebase push
+outbox below; local polling alone does not guarantee background delivery.
+
+### Android background notification rollout
+
+1. Download `google-services.json` from Firebase to
+   `Sentra/android/app/google-services.json` as local Android client
+   configuration (ignored by Git). Never put a Firebase service-account private key in the app
+   or Git. Store that private key as the customer Render service's secret file
+   `firebase-service-account.json`.
+2. Apply additive schema **6** using `cloud_database.py init`, then `check`,
+   before enabling push. Deploy the cloud requirements and source changes.
+3. Set `GHOST_CLOUD_PUSH_ENABLED=true` on the customer backend.
+   `GHOST_FIREBASE_CREDENTIALS_FILE` defaults to
+   `/etc/secrets/firebase-service-account.json`. Startup validates the schema
+   and credential; an invalid configuration fails explicitly. The Firebase
+   service account must belong to the Android client's project, and the
+   Firebase Cloud Messaging API must be enabled.
+4. Rebuild/install the Android app, allow notifications, and sign in with a
+   verified account. Registration is automatic; Settings controls both local
+   and remote alerts. Background setup/removal failures appear in an app-wide
+   error banner with Retry, without discarding a working customer session.
+5. Send a genuine WARNING and BLOCKED transition with the app foregrounded,
+   then repeat with the phone locked and with the app swiped away. Confirm
+   notifications on each device and that an unrelated verified account with
+   no membership receives none. Do not declare push verified until these
+   physical checks pass.
+
+Push recipients are resolved server-side from current household membership,
+verified account and session version, never client-provided home/topic IDs.
+Token rotation/account switching removes the old installation's pending queue;
+logout and disable revoke via a private installation credential even when the
+account token expired. If offline logout cannot confirm revocation, the app
+reports it and retries on reconnection. Lock-screen text is deliberately generic;
+details require authenticated household access. A push already accepted by
+Google cannot be recalled during logout.
+
+The durable outbox deduplicates gateway/event/installations, rechecks access
+before sending, drops events older than 60 seconds, retries at most four times,
+and deletes unregistered tokens. Registrations expire after 30 days without an
+app refresh, with at most 20 notification installations per account.
+Monitoring uploads remain successful during a push outage.
+Delivery is at-least-once across a backend crash; Android event tags and saved
+event history reduce duplicates. Foreground notifications continue to use
+snapshot polling, not a duplicate FCM dispatcher.
+Android force-stop, denied permissions, Doze/network conditions or vendor
+battery restrictions can prevent/delay delivery; swiping away is not force-stop.
+
+A signup HTTP 409 means the normalized email is already registered. Sign in
+or recover that account, or use a genuinely unregistered email for isolation
+tests. A second account must verify email and must not see the first account's
+home unless explicitly invited. Do not invite the second account when testing
+denied access; assigning the same Pi to two independent homes is not an
+isolation test.
 
 ## Earlier foundation and legacy gateway procedures
 

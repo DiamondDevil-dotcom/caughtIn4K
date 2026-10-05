@@ -38,7 +38,7 @@ class UploadConfig:
     credential: str
     router_token: str
     local_url: str = "http://127.0.0.1:8001"
-    interval: int = 30
+    interval: int = 2
     staging_token: str = ""
 
     def __post_init__(self):
@@ -57,8 +57,8 @@ class UploadConfig:
             raise ValueError("Local router URL must use http://127.0.0.1 with a port.")
         if not 32 <= len(self.credential) <= 256 or not self.router_token:
             raise ValueError("Configure the unique cloud gateway credential and private router token.")
-        if not 10 <= self.interval <= 60:
-            raise ValueError("Upload interval must be between 10 and 60 seconds.")
+        if not 2 <= self.interval <= 60:
+            raise ValueError("Upload interval must be between 2 and 60 seconds.")
         if self.staging_token and (
             not 32 <= len(self.staging_token) <= 256
             or any(character.isspace() for character in self.staging_token)
@@ -140,6 +140,7 @@ def retry_delay(failures: int, interval: int) -> float:
 def run(config: UploadConfig) -> None:
     failures = 0
     while True:
+        started = time.monotonic()
         try:
             upload_once(config)
         except PermanentUploadError:
@@ -152,7 +153,7 @@ def run(config: UploadConfig) -> None:
             if failures:
                 logger.info("Cloud metadata connection recovered.")
             failures = 0
-            time.sleep(config.interval)
+            time.sleep(max(0, config.interval - (time.monotonic() - started)))
 
 
 def main() -> None:
@@ -169,6 +170,7 @@ def main() -> None:
             credential=os.getenv("GHOST_CLOUD_GATEWAY_CREDENTIAL", ""),
             router_token=os.getenv("GHOST_ROUTER_TOKEN", ""),
             staging_token=os.getenv("GHOST_CLOUD_STAGING_TOKEN", ""),
+            interval=int(os.getenv("GHOST_CLOUD_UPLOAD_INTERVAL", "2")),
         )
     except ValueError:
         raise SystemExit("Invalid cloud uploader configuration. Check private gateway settings.") from None

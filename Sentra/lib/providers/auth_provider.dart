@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/router_api_service.dart';
 import '../services/cloud_api_service.dart';
+import '../services/push_notification_service.dart';
 
 /// Customer accounts use the shared service; sessions use secure phone storage.
 class AuthProvider extends ChangeNotifier {
@@ -22,7 +25,8 @@ class AuthProvider extends ChangeNotifier {
   bool get passwordFallbackForLaunch => _passwordFallbackForLaunch;
   String get name => _name ?? 'Security owner';
   String get email => _email ?? '';
-  String? get householdRole => RouterApiService.cloudMode ? CloudApiService.role : _householdRole;
+  String? get householdRole =>
+      RouterApiService.cloudMode ? CloudApiService.role : _householdRole;
 
   void selectCloudGateway(Map<String, dynamic> gateway) {
     CloudApiService.select(gateway);
@@ -43,7 +47,11 @@ class AuthProvider extends ChangeNotifier {
   Future<void> refreshAccount() async {
     final result = await CloudApiService.request('GET', '/cloud/auth/me');
     emailVerified = result['email_verified'] == true;
-    await CloudApiService.rememberAccount({...result, 'access_token': CloudApiService.session});
+    await CloudApiService.rememberAccount({
+      ...result,
+      'access_token': CloudApiService.session,
+    });
+    unawaited(PushNotificationService.syncSafely());
     notifyListeners();
   }
 
@@ -57,6 +65,7 @@ class AuthProvider extends ChangeNotifier {
       }
       _ready = true;
       notifyListeners();
+      unawaited(PushNotificationService.syncSafely());
       return;
     }
     final preferences = await SharedPreferences.getInstance();
@@ -67,7 +76,9 @@ class AuthProvider extends ChangeNotifier {
         RouterApiService.hasSession) {
       _email = session[0];
       _name = session[1];
-      _householdRole = session.length > 2 && session[2].isNotEmpty ? session[2] : null;
+      _householdRole = session.length > 2 && session[2].isNotEmpty
+          ? session[2]
+          : null;
     }
     _ready = true;
     notifyListeners();
@@ -102,6 +113,7 @@ class AuthProvider extends ChangeNotifier {
       choosingHome = false;
       await _persistSession(_email!, _name!, _householdRole);
       notifyListeners();
+      unawaited(PushNotificationService.syncSafely());
       return null;
     } catch (error) {
       return 'Sign in failed: $error';
@@ -132,6 +144,7 @@ class AuthProvider extends ChangeNotifier {
       choosingHome = false;
       await _persistSession(_email!, _name!, _householdRole);
       notifyListeners();
+      unawaited(PushNotificationService.syncSafely());
       return null;
     } catch (error) {
       return 'Could not create account: $error';
@@ -139,6 +152,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> signOut({bool preservePasswordFallback = false}) async {
+    await PushNotificationService.revokeForLogout();
     await RouterApiService.clearSession();
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_signedInKey, false);
@@ -165,14 +179,19 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<String?> changePassword(String currentPassword, String newPassword) async {
+  Future<String?> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
     try {
       final result = await RouterApiService.changePassword(
         email: email,
         currentPassword: currentPassword,
         newPassword: newPassword,
       );
-      return result['success'] == true ? null : result['error'] as String? ?? 'Password change failed.';
+      return result['success'] == true
+          ? null
+          : result['error'] as String? ?? 'Password change failed.';
     } catch (error) {
       return 'Could not change your password: $error';
     }
