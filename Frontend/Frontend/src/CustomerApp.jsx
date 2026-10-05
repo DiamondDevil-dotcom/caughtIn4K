@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CloudClient, LiveAlertTracker, recentWarnings, snapshotStale, trainingReady } from "./cloud-client";
+import { CustomerDeviceCard, DashboardHeader, DashboardMetrics, DashboardSidebar, DetectionHistory } from "./customer-dashboard";
 import "./customer.css";
 
 export default function CustomerApp() {
@@ -38,6 +39,7 @@ export default function CustomerApp() {
   }, []);
   useEffect(() => {
     document.documentElement.dataset.customerTheme = light ? "light" : "dark";
+    document.documentElement.dataset.theme = light ? "light" : "dark";
     localStorage.setItem("customer-theme", light ? "light" : "dark");
   }, [light]);
   useEffect(() => {
@@ -201,15 +203,15 @@ export default function CustomerApp() {
       throw new Error("Timed out. Check command status before retrying.");
   }
 
-  return <main className="customer-app">
-    <header><h1>caughtIn4K</h1><span>Your smart home, wherever you are</span>
-      {account && <button disabled={busy} onClick={logout}>Sign out</button>}
-    </header>
+  return <main className={`customer-app ${home ? "site-shell" : "login-shell"}`}>
+    <DashboardHeader account={account} light={light} onTheme={() => setLight(value => !value)}
+      onLogout={logout} busy={busy} connected={!stale && Boolean(home)} />
     {error && <p role="alert" className="customer-error">{error}</p>}
     {syncError && <p role="alert" className="customer-error">Live updates: {syncError}</p>}
     {notificationError && <p role="alert" className="customer-error">{notificationError}</p>}
     {message && <p role="status">{message}</p>}
-    {!account ? <section className="customer-panel">
+    {!account ? <section className="customer-panel customer-login login-panel">
+      <p className="dashboard-eyebrow">{signup ? "Create your secure home account" : "Authorized access"}</p>
       <h2>{recovery ? "Recover your account" : signup ? "Create an account" : "Sign in"}</h2>
       <form onSubmit={(event) => {
         const data = values(event);
@@ -265,18 +267,16 @@ export default function CustomerApp() {
         setTick((value) => value + 1);
       }); }}><label>Household invitation code<input name="code" required /></label><button disabled={busy}>Join home</button></form>
     </section> : <>
-      <nav className="customer-tabs" aria-label="Dashboard sections">
-        {["Home", "Devices", "Activity", "Settings"].map(name =>
-          <button key={name} aria-current={tab === name ? "page" : undefined}
-            onClick={() => setTab(name)}>{name}</button>)}
-      </nav>
+      <div className="dashboard-layout">
+      <DashboardSidebar tab={tab} onTab={setTab} alertCount={snapshot?.alerts.length ?? 0} />
+      <div className="app-content dashboard-content">
       {cloud.pending?.unconfirmed && <section className="customer-panel" aria-label="Command recovery">
         <p>A {cloud.pending.action === "train" ? "training start" : "device action"} is awaiting confirmation. Do not send it again.</p>
         <button disabled={busy} onClick={() => run(checkCommand)}>Check command status</button>
       </section>}
       <div className="customer-tab">
-      <div hidden={tab !== "Home"}>
-      <section className="customer-panel"><h2>{home.name}</h2><p>{home.gateway_name} · {home.role}</p>
+      <div hidden={!["Home", "Model"].includes(tab)}>
+      <section className="customer-panel home-overview" hidden={tab === "Model"}><h2>{home.name}</h2><p>{home.gateway_name} · {home.role}</p>
         <button disabled={busy} onClick={manageHomes}>Manage homes</button>
         <p>{stale ? "Your home is offline or updates are delayed. Showing the last update." : "Your home is connected. Checking updates every 2 seconds."}</p>
         {!stale && warnings.map(event => <p key={event.mac} role="status">
@@ -284,13 +284,9 @@ export default function CustomerApp() {
           Detected in the last 60 seconds; current status is shown separately.
         </p>)}
         {snapshot && <p>Updated: {new Date(snapshot.observed_at).toLocaleString()}</p>}
-        <div className="customer-stats">
-          <p><strong>{snapshot?.devices.length ?? 0}</strong> Devices</p>
-          <p><strong>{snapshot?.devices.filter(device => device.blocked).length ?? 0}</strong> Blocked</p>
-          <p><strong>{warnings.length}</strong> Recent warnings</p>
-        </div>
       </section>
-      <section className="customer-panel"><h2>Threat detection &amp; global model</h2>
+      {tab === "Home" && <DashboardMetrics snapshot={snapshot} />}
+      <section className="customer-panel" hidden={tab !== "Model"}><p className="dashboard-eyebrow">Distributed learning</p><h2>Federated model</h2>
         <p>{snapshot?.model.available ? "Detection model available on your home gateway." : "Waiting for a detection-model update from your home gateway."}</p>
         <p>Training: {training?.state || "unavailable"}{training && ` · ${training.current_round}/${training.total_rounds} rounds`}</p>
         <p>Pi checkpoint: {Number.isInteger(federated?.federated_round) ? `round ${federated.federated_round}` : "not yet reported"}</p>
@@ -304,30 +300,30 @@ export default function CustomerApp() {
         </> : <p>Only household owners and admins can update the global model.</p>}
         <p>Startup acceptance is not training completion. Coordinator rounds and the Pi checkpoint are reported separately.</p>
       </section>
-      <section className="customer-panel"><h2>Live alerts</h2>
+      <section className="customer-panel" hidden={tab !== "Home"}><h2>Live alerts</h2>
         <p role="status" aria-live="polite">{liveAlerts.length ? `Latest event: ${liveAlerts[0].status}` : "New threat events will appear here while this page is open."}</p>
         {liveAlerts.slice(0, 5).map(alert => <p key={`${alert.event_id}:${alert.timestamp}`}>
           {alert.status} · {snapshot?.devices.find(device => device.mac === alert.mac)?.name || alert.mac} · {new Date(alert.timestamp).toLocaleTimeString()}
         </p>)}
       </section>
       </div>
-      <div hidden={tab !== "Devices"}>
-      <section className="customer-panel"><h2>Devices</h2>
+      <div hidden={!["Home", "Devices"].includes(tab)}>
+      <section className="operations-section"><p className="dashboard-eyebrow">Live router telemetry</p><h2>IoT network</h2>
         {!snapshot && <p>Waiting for a gateway snapshot...</p>}
         {snapshot?.devices.length === 0 && <p>No devices reported yet.</p>}
-        {snapshot?.devices.map((device) => <article className="customer-device" key={device.mac}>
-          <div><h3>{device.name}</h3><p>{device.mac} · {device.ip_address || "IP not reported"}</p>
-            <p>{device.status} · {device.attack_probability}% attack probability</p>
-            {!stale && warnings.some(event => event.mac === device.mac) && <p>Recent WARNING detected on this device (last 60 seconds).</p>}</div>
-          <button disabled={busy || stale || !canControl || cloud.pending?.unconfirmed}
-            onClick={() => control(device)}>{busy && cloud.pending?.mac === device.mac ? "Waiting for Pi..." : device.blocked ? "Unblock" : "Block"}</button>
-          {canControl && <button disabled={busy || stale || !snapshot?.device_management_available || cloud.pending?.unconfirmed} onClick={() => {
+        <div className="dashboard-device-grid">
+        {snapshot?.devices.map((device) => <CustomerDeviceCard key={device.mac} device={device}
+          warning={!stale && warnings.some(event => event.mac === device.mac)}
+          canControl={canControl} disabled={busy || stale || !canControl || cloud.pending?.unconfirmed}
+          managementDisabled={busy || stale || !snapshot?.device_management_available || cloud.pending?.unconfirmed}
+          waiting={busy && cloud.pending?.mac === device.mac}
+          onControl={() => control(device)} onRemove={() => {
             if (window.confirm(`Remove ${device.name}? Its device record and detection history will be deleted on the Pi. A blocked device will first be unblocked.`)) {
               run(() => execute(device.mac, "remove"));
             }
-          }}>Remove</button>}
-        </article>)}
-        {canControl && <form onSubmit={(event) => {
+          }} />)}
+        </div>
+        {canControl && <form className="customer-panel add-device-panel" onSubmit={(event) => {
           const data = values(event);
           run(() => execute(data.mac.trim().toLowerCase(), "register", {device_name: data.name, ip_address: data.ip.trim()}));
         }}>
@@ -341,12 +337,10 @@ export default function CustomerApp() {
       </section>
       </div>
       <div hidden={tab !== "Activity"}>
-      <section className="customer-panel"><h2>Activity</h2>
+      <section className="history-heading"><p className="dashboard-eyebrow">Historical telemetry</p><h2>Alerts &amp; history</h2>
         <p>Real Pi detection history, refreshed every 2 seconds. {stale && "Updates are delayed; showing the last received history."}</p>
-        {snapshot?.alerts.length === 0 && <p>No detection events reported yet.</p>}
-        {snapshot?.alerts.map((alert) => <p key={alert.event_id}>
-          {new Date(alert.timestamp).toLocaleString()} · {snapshot.devices.find(device => device.mac === alert.mac)?.name || alert.mac} · {alert.status} · {alert.attack_probability}%</p>)}
       </section>
+      {tab === "Activity" && <DetectionHistory snapshot={snapshot} />}
       </div>
       <div hidden={tab !== "Settings"}>
       <section className="customer-panel"><h2>Settings</h2>
@@ -373,6 +367,9 @@ export default function CustomerApp() {
         <button disabled={busy}>Change password</button></form></section>
       </div>
       </div>
+      </div>
+      </div>
     </>}
+    {home && <footer className="dashboard-footer"><span>GHOST-1D-GRU / EA-NGO</span><span>SECURITY OPERATIONS PLATFORM</span></footer>}
   </main>;
 }

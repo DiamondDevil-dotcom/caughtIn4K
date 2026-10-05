@@ -268,8 +268,14 @@ test alone is not proof of federated training.
 ### Website and mobile synchronization
 
 The customer website uses the same account, household, gateway snapshots and
-command queue as the mobile app. Home, Devices, Activity and Settings tabs show
-real Pi data; there are no simulated devices or independent website model runs.
+command queue as the mobile app. It retains the original security-operations
+presentation: branded header, "Know your exposure" sidebar, Operations metrics
+and device cards, Detection history chart/table, and Federated model view.
+Settings & access contains the new customer account and notification controls.
+These views show real Pi data; there are no simulated devices or independent
+website model runs. The chart groups uploaded detection statuses rather than
+inventing attack-type labels. Legacy access-audit data is not exposed through
+the customer API, so it is not substituted with fabricated login records.
 Both clients poll every two seconds while active. A command acknowledged by
 the Pi becomes visible to the other client through the next fresh snapshot.
 Browser background throttling, network delay and a sleeping backend can slow

@@ -34,3 +34,104 @@ html[data-customer-theme="light"] .customer-stats strong { color: #187c72; }
   .customer-tabs { gap: 4px; }
   .customer-tabs button { padding: 10px 4px; font-size: .875rem; }
 }
+
+/* Preserve the original security-operations dashboard presentation. */
+.customer-app { max-width: 1440px; min-height: 100vh; padding: 24px 48px; }
+.customer-app [hidden] { display: none !important; }
+.customer-app h2 { font-size: 1.875rem; line-height: 1.2; letter-spacing: -.03em; margin-bottom: 16px; }
+.customer-app h3 { font-size: 1.125rem; margin-bottom: 10px; }
+.customer-app p { line-height: 1.6; margin: 8px 0; }
+.customer-app small { color: #64748b; }
+.customer-panel { border-color: #ffffff1a; border-radius: 0; background: #0d1b2b; }
+.customer-app button { border-radius: 0; }
+.customer-app input, .customer-app textarea, .customer-app select { border-radius: 0; border-color: #ffffff1a; background: #ffffff0a; }
+.customer-app .dashboard-header { justify-content: space-between; border-bottom: 1px solid #ffffff1a; padding-bottom: 20px; margin-bottom: 0; }
+.brand-lockup { display: flex; align-items: center; gap: 12px; }
+.brand-lockup strong { display: block; font-size: 1.125rem; }
+.brand-lockup small { display: block; color: #94a3b8; font-size: .75rem; }
+.dashboard-account { display: flex; align-items: center; gap: 16px; font-size: .75rem; color: #94a3b8; }
+.dashboard-account button { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: none; padding: 8px; margin: 0; }
+.dashboard-account button:last-child { color: #f58c7c; }
+.connection-indicator { display: inline-flex; align-items: center; gap: 8px; }
+.connection-indicator::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #f7b955; }
+.connection-indicator.connected::before { background: #62d6a7; box-shadow: 0 0 12px #62d6a7; }
+.dashboard-layout { display: flex; gap: 64px; padding: 40px 0; }
+.dashboard-sidebar { flex: 0 0 240px; }
+.dashboard-eyebrow { color: #62d6a7; font-size: .6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: .22em; }
+.dashboard-sidebar h1 { font-size: 3rem; line-height: .95; letter-spacing: -.04em; margin-top: 20px; }
+.dashboard-sidebar .dashboard-intro { font-size: .875rem; line-height: 1.7; color: #94a3b8; margin-top: 20px; }
+.dashboard-sidebar nav { display: grid; gap: 8px; margin-top: 40px; }
+.dashboard-sidebar nav button { display: flex; align-items: center; gap: 10px; margin: 0; padding: 12px 14px; border: 1px solid transparent; background: transparent; color: #94a3b8; text-align: left; font-size: .875rem; }
+.dashboard-sidebar nav button[aria-current] { color: #62d6a7; border-color: #62d6a733; background: #62d6a710; }
+.dashboard-count { margin-left: auto; font-size: .625rem; padding: 2px 8px; background: #ffffff1a; border-radius: 999px; }
+.dashboard-content { flex: 1; min-width: 0; }
+.dashboard-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
+.dashboard-metric { padding: 16px; border: 1px solid #ffffff1a; background: #ffffff09; }
+.dashboard-metric > div { display: flex; align-items: center; gap: 8px; color: #62d6a7; }
+.dashboard-metric > div span { font-size: .625rem; text-transform: uppercase; letter-spacing: .1em; color: #64748b; }
+.dashboard-metric p { font-size: 1.5rem; margin: 12px 0 4px; }
+.dashboard-metric small { font-size: .75rem; }
+.home-overview { margin-top: 0; }
+.dashboard-device-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
+.dashboard-device { border: 1px solid #ffffff1a; background: #0d1b2b; padding: 20px; transition: border-color 180ms ease-out; min-width: 0; }
+.dashboard-device:hover { border-color: #62d6a780; }
+.dashboard-device-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 28px; gap: 8px; }
+.device-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; background: #132b39; color: #62d6a7; }
+.device-safe, .device-threat { font-size: .625rem; text-transform: uppercase; letter-spacing: .1em; }
+.device-safe { color: #62d6a7; }.device-threat, .device-warning { color: #f58c7c; }
+.dashboard-device h3 { font-size: 1.25rem; }
+.device-mac { font-family: "DM Mono", monospace; font-size: .75rem; color: #64748b; overflow-wrap: anywhere; }
+.device-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border-top: 1px solid #ffffff1a; padding-top: 16px; margin-top: 24px; font-size: .75rem; }
+.device-metrics small, .device-metrics span { display: block; overflow-wrap: anywhere; }
+.device-metrics span { margin-top: 5px; }
+.device-warning { font-size: .75rem; }
+.dashboard-device button { display: flex; justify-content: center; align-items: center; gap: 8px; width: 100%; margin: 20px 0 0; font-size: .875rem; padding: 12px; }
+.dashboard-device .device-block { border-color: #f58c7c80; color: #f58c7c; background: transparent; }
+.dashboard-device .device-unblock { color: #07111f; background: #62d6a7; }
+.dashboard-device .device-remove { margin-top: 8px; background: transparent; border-color: #ffffff1a; color: #94a3b8; font-size: .75rem; padding: 8px; }
+.operations-section { margin-top: 32px; }
+.customer-app .add-device-panel { max-width: none; }
+.history-summary { display: grid; grid-template-columns: 1.2fr .8fr; gap: 20px; }
+.history-chart { height: 256px; min-width: 0; }
+.activity-total { font-size: 3rem; }
+.history-table { overflow-x: auto; padding: 0; }
+.history-table table { width: 100%; min-width: 620px; text-align: left; font-size: .875rem; border-collapse: collapse; }
+.history-table th { font-size: .625rem; text-transform: uppercase; letter-spacing: .1em; color: #64748b; }
+.history-table th, .history-table td { padding: 16px 20px; border-bottom: 1px solid #ffffff0d; }
+.dashboard-footer { display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid #ffffff1a; padding: 16px 0; font-size: .6875rem; color: #64748b; }
+.customer-login { max-width: 448px; margin: 64px auto; padding: 36px; }
+.customer-login form { max-width: none; }
+.customer-login form > button { background: #62d6a7; color: #07111f; border: none; font-weight: 600; padding: 14px; margin: 4px 0; }
+.customer-login > button { background: transparent; color: #94a3b8; border: none; padding: 8px 0; margin: 4px 12px 4px 0; font-size: .875rem; }
+html[data-customer-theme="light"] .dashboard-header,
+html[data-customer-theme="light"] .dashboard-footer,
+html[data-customer-theme="light"] .device-metrics,
+html[data-customer-theme="light"] .history-table td { border-color: #cfdbdd; }
+html[data-customer-theme="light"] .dashboard-metric,
+html[data-customer-theme="light"] .dashboard-device { color: #182930; background: #fff; border-color: #d4dfe1; }
+html[data-customer-theme="light"] .dashboard-eyebrow,
+html[data-customer-theme="light"] .dashboard-sidebar nav button[aria-current],
+html[data-customer-theme="light"] .device-safe { color: #187c72; }
+@media (max-width: 1200px) {
+  .dashboard-layout { gap: 32px; }
+  .dashboard-device-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .customer-app { padding: 20px 24px; }
+  .dashboard-layout { flex-direction: column; gap: 24px; }
+  .dashboard-sidebar { flex-basis: auto; }
+  .dashboard-sidebar h1 { max-width: 400px; }
+  .dashboard-sidebar nav { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 24px; }
+  .dashboard-username { display: none; }
+}
+@media (max-width: 600px) {
+  .customer-app { padding: 16px; }
+  .dashboard-account { gap: 4px; }
+  .connection-indicator { display: none; }
+  .dashboard-sidebar h1 { font-size: 2.5rem; }
+  .dashboard-sidebar nav button { padding: 10px; font-size: .75rem; }
+  .dashboard-device-grid, .history-summary { grid-template-columns: minmax(0, 1fr); }
+  .customer-login { padding: 24px; margin-top: 32px; }
+}
+@media (prefers-reduced-motion: reduce) { .dashboard-device { transition: none; } }
