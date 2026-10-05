@@ -22,6 +22,7 @@ import statistics
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from contextvars import ContextVar
 import urllib.error
 import urllib.request
@@ -506,6 +507,7 @@ PUBLIC_WITHOUT_HOUSEHOLD = {
     "/gateway/claim",
 }
 COORDINATOR_ROUTES = {"/federated/start-client", "/federated/stop-client"}
+PRIVATE_AGENT_ROUTES = {"/cloud-agent/snapshot"}
 
 
 @app.middleware("http")
@@ -519,6 +521,7 @@ async def require_private_tunnel_token(request: Request, call_next):
         request.method != "OPTIONS"
         and request.url.path not in PUBLIC_WITHOUT_HOUSEHOLD
         and request.url.path not in COORDINATOR_ROUTES
+        and request.url.path not in PRIVATE_AGENT_ROUTES
     ):
         email = request.headers.get("X-Gateway-User", "").strip().lower()
         role = storage.household_role(email) if email else None
@@ -605,6 +608,47 @@ class FederatedStartClientPayload(BaseModel):
 
 
 _model_holder: dict[str, object] = {}
+
+
+@app.get("/cloud-agent/snapshot")
+def cloud_agent_snapshot():
+    if os.getenv("GHOST_CLOUD_UPLOAD_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="Cloud snapshot export is disabled.")
+    devices = list_devices()["devices"]
+    if len(devices) > 500:
+        raise HTTPException(status_code=503, detail="Cloud snapshot device limit exceeded.")
+    events = [
+        event for event in storage.recent_events(100)
+        if not is_excluded_device(event["mac"])
+    ]
+    with _model_reload_lock:
+        model_available = _model_holder.get("model") is not None
+        model_mtime = _model_holder.get("model_mtime")
+    return {
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "devices": [
+            {key: device[key] for key in (
+                "mac", "name", "ip_address", "status", "attack_probability", "blocked",
+            )}
+            for device in devices
+        ],
+        "alerts": [
+            {
+                "event_id": event["id"], "mac": event["mac"], "status": event["status"],
+                "attack_probability": round(event["attack_probability"] * 100, 2),
+                "timestamp": datetime.fromtimestamp(event["timestamp"], timezone.utc).isoformat(),
+            }
+            for event in events
+        ],
+        "model": {
+            "available": model_available,
+            "checkpoint_name": DEFAULT_MODEL_PATH.name if model_available else None,
+            "updated_at": (
+                datetime.fromtimestamp(model_mtime, timezone.utc).isoformat()
+                if model_available and model_mtime is not None else None
+            ),
+        },
+    }
 
 
 @app.get("/devices")

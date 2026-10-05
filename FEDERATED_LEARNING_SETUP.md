@@ -12,6 +12,197 @@ Pi's labeled CSV remains on the Pi unless someone copies it manually.
 
 ## Sentra connection modes
 
+### Consumer cloud foundation (not activated)
+
+The existing deployment below still uses one Pi household. The new optional
+PostgreSQL foundation does not change login, device routing, or the Pi database.
+Consumer multi-household registration and onboarding are not yet available.
+
+Use a Supabase PostgreSQL **Session pooler** connection for the backend. Keep
+the Data API disabled; Flutter and Vite must never receive database credentials.
+Set `GHOST_CLOUD_DATABASE_URL` privately in the shell used for database setup.
+URL-encode special characters in the password and require TLS. Never commit
+the populated connection string or put it in a `VITE_` environment variable.
+
+After installing the backend requirements, run from `Backend/Backend`:
+
+```powershell
+& "..\..\.venv\Scripts\python.exe" cloud_database.py init
+& "..\..\.venv\Scripts\python.exe" cloud_database.py check
+```
+
+If the environment variable is absent, the CLI prompts for the connection URL
+without echoing it. A URL containing `[YOUR-PASSWORD]` triggers a second hidden
+password prompt; the CLI URL-encodes that password. Nothing is saved to disk.
+
+Initialization is explicit, transactional, and versioned; it creates only the
+private `caughtin4k` schema and does not import or delete existing Pi records.
+The tables cover accounts, households, memberships, gateways, invitations, and
+reset tokens. Gateway credentials and pairing codes are stored as hashes, not
+plaintext. Row-level security has no client-access policies. The trusted
+database owner connection bypasses RLS, so backend household authorization is
+still required; RLS alone does not prove tenant isolation.
+
+Do not switch the live deployment until cloud account APIs, household-scoped
+routing, gateway connectivity, and migration of existing password hashes and
+memberships are implemented and tested. Keep the Pi device/event history in
+place. Live database validation is required in addition to local unit tests.
+
+Development account endpoints can be enabled with
+`GHOST_CLOUD_ACCOUNTS_ENABLED=true` and a separate stable
+`GHOST_CLOUD_SESSION_SECRET` of at least 32 random characters. They are under
+`/cloud/auth/signup`, `/cloud/auth/login`, `/cloud/auth/me`,
+`/cloud/auth/logout-all`, and `/cloud/households`. Signup grants no membership.
+Membership queries use the authenticated account UUID, not client identity
+fields. Cloud tokens use a distinct namespace and cannot authorize the legacy
+Pi API. Logout-all increments the persisted session version. Existing imported
+PBKDF2 hashes can retain their iteration count; new hashes use 600,000.
+
+Keep this flag **false on the public deployment**. These endpoints are a
+development stage, not consumer-ready: cloud recovery, abuse rate limits,
+email verification, gateway pairing, household UI, and the legacy data import
+still need implementation. Pi reset email remains the live recovery path.
+
+The consumer hardware direction is a preconfigured Pi with a unique setup QR.
+The trusted `cloud_gateways.provision_gateway` function registers an unclaimed
+gateway with independently generated machine and pairing secrets, storing only
+SHA-256 hashes. The operator must specify a future pairing expiry. Its returned
+machine credential is for protected Pi configuration only; the versioned QR
+payload contains only gateway ID and pairing code. Provisioning is intentionally
+not exposed as a public HTTP endpoint. Secure factory tooling, labels, and Pi
+credential installation remain to be built.
+
+In development cloud mode, `POST /cloud/gateways/pair` accepts `gateway_id`,
+`pairing_code`, and `household_name`. It creates a separate household owned by
+the authenticated account. A transaction locks the gateway, rejects invalid,
+expired, consumed, or revoked pairing codes, and clears the pairing secret on
+success. `GET /cloud/households/{household_id}/gateways` requires membership and
+never returns credential hashes. This first pairing flow creates a new household;
+adding another Pi to an existing household is not yet supported.
+
+These APIs do not establish a Pi connection or migrate the existing installation.
+Outbound gateway connectivity, QR scanning, and integration/concurrency tests
+against PostgreSQL are still required before release.
+
+Run the opt-in live account/pairing check from `Backend/Backend`:
+
+```powershell
+& "..\..\.venv\Scripts\python.exe" test_cloud_integration.py
+```
+
+It prompts privately for the database URL, creates uniquely identified test
+accounts and gateways, checks two-household access separation, pairing-code
+replay, competing claims, and session revocation, then deletes only the records
+it created. It does not contact the existing Pi. A process interruption may
+leave test records; do not interrupt it or treat mocked unit tests as proof of
+live database isolation. This check is not a full production security review.
+
+Cloud invitations are available in development mode through
+`POST /cloud/households/{household_id}/invites` (`email`, `role`) and
+`POST /cloud/household-invites/accept` (`invite_code`). Owners can invite admins
+or members; admins can invite members only. Invitations expire after 24 hours
+and are bound to the recipient account's stored email. Acceptance checks the
+inviter's current permissions, locks and consumes the invitation transactionally,
+and never overwrites an existing membership. The creator receives the code
+once; email delivery and consumer sharing UI are not implemented for cloud
+invitations. The live test also checks wrong-recipient refusal, invitation replay,
+and member invitation restrictions. Verified cloud email ownership and abuse
+controls are still needed before these endpoints can be publicly enabled.
+
+Schema version 2 adds bounded last-known gateway snapshots. Run
+`cloud_database.py init` again to apply the additive migration; version 1
+accounts and memberships are preserved. In development mode,
+`PUT /cloud/gateways/{gateway_id}/snapshot` requires the unique Pi machine
+credential in `X-Gateway-Credential`, not a user session. Only paired, non-revoked
+gateways can upload. The API accepts at most 500 devices and 100 recent alerts
+plus model metadata; it rejects extra fields such as raw packets/training rows.
+This is a latest snapshot, not a permanent alert archive.
+
+`GET /cloud/households/{household_id}/gateways/{gateway_id}/snapshot` requires
+account membership in that exact household. `snapshot_available=false` means
+no data has arrived; it is not an empty-device success. `recent_contact` reflects
+server-observed gateway contact within 90 seconds, while `data_stale` reflects
+the observation timestamp. Neither field proves continuous connectivity.
+Old/replayed snapshots cannot overwrite newer observations. Snapshots remain
+readable when a gateway is offline, with explicit freshness timestamps.
+Command delivery, consumer UI, and a retention policy are not yet implemented.
+Keep public cloud mode disabled.
+
+The opt-in `cloud_uploader.py` runs as a separate Pi process using only Python's
+standard library. It reads the token-protected loopback `/cloud-agent/snapshot`
+export, then uploads metadata over HTTPS every 30 seconds. Both source export
+and uploader require `GHOST_CLOUD_UPLOAD_ENABLED=true`. Additional private
+settings are `GHOST_CLOUD_API_URL` (HTTPS origin), `GHOST_CLOUD_GATEWAY_ID`, and
+`GHOST_CLOUD_GATEWAY_CREDENTIAL` (the separately provisioned machine secret).
+The uploader never receives the cloud database password or a user session.
+No proxy-environment settings or redirects can forward its credentials elsewhere.
+
+Temporary connectivity failures use bounded exponential retries with jitter.
+Invalid credentials/configuration stop the uploader with an explicit error.
+The existing router token goes only to loopback; the cloud credential goes only
+to the configured cloud origin. Model availability reflects the router's loaded
+model, not merely an existing checkpoint file; this upload does not claim or
+trigger a federated round. Devices and alerts express attack probability as
+percentages (0–100) and preserve SAFE/WARNING/ALERT/BLOCKED statuses.
+Capture, local training CSVs, Flower ports/processes,
+and inference checkpoints are unchanged. No uploader service is deployed yet.
+End-to-end Pi upload verification, provisioning tooling, command delivery, and
+consumer UI remain outstanding. Keep existing Ngrok monitoring until cutover.
+
+`provision_cloud_gateway.py` is trusted operator tooling for **new** gateways,
+not an import tool for the existing claimed Pi. It prompts privately for the
+database URL, checks the schema, and requires a name, explicit timezone-aware
+pairing expiry, HTTPS cloud origin, and a new absolute output directory outside
+the repository. On Windows it removes inherited directory permissions and grants
+the current Windows SID access; on POSIX the directory is mode 0700 and files
+are mode 0600. Files are created exclusively, never overwritten.
+
+The bundle contains `gateway.env` (machine credential; uploader disabled),
+`pairing-label.json` (customer setup secret and gateway ID), and
+`pairing-expiry.txt`. These are sensitive operator outputs: do not upload them
+to GitHub, chat, or third-party QR generators. The JSON is QR content, not yet a
+rendered QR image. Registration commits only after the files are written.
+On failure, do not use partial bundles; ambiguous database commit failures need
+operator reconciliation. Do not run this on the existing Pi yet: migration must
+preserve its owner, members, password hashes, history, and FL checkpoint.
+
+`migrate_pi_household.py --backup <private-sqlite-backup>` inspects a consistent
+Pi backup read-only, validates integrity and owner/member relationships, and
+prints counts only. It never creates a missing SQLite file. Explicit `--apply`
+also requires `--name`, `--cloud-url`, and a new private `--output` folder, then
+prompts for the cloud database URL. Import preserves PBKDF2 hashes/salts with
+the legacy 100,000 iteration count, account timestamps, and household roles.
+Existing non-member accounts are imported without household access.
+
+The import transaction refuses all existing cloud email conflicts, including
+a second import of the same backup; no account is silently merged or overwritten.
+It creates an already-owned gateway with no customer pairing secret and saves
+its machine configuration with uploads disabled. Pending invitations and reset
+codes are intentionally not imported; reissue them after cutover. Device/event
+history, datasets, checkpoints, and Flower processes stay on the Pi.
+Source backups and output credentials must remain private and outside Git.
+Import does not switch live login or routing. A backup can become stale if users
+change passwords or memberships afterward; final migration requires a coordinated
+write freeze/fresh backup and live imported-account verification before cutover.
+
+After importing, run `verify_cloud_import.py --bundle <private-output-folder>`.
+It prompts privately for the database URL, existing owner email, and existing
+account password; it performs only reads and checks password compatibility,
+owner membership in the imported household, and the expected non-revoked
+gateway. It does not install the gateway credential or enable cloud uploads.
+Never paste account passwords or generated machine configuration into chat.
+
+Use a separate Render staging service for development cloud APIs, not the live
+gateway. Enabling cloud mode also requires a separate
+`GHOST_CLOUD_STAGING_TOKEN` of at least 32 random characters. Every `/cloud/`
+request must include it in `X-Cloud-Staging-Token` in addition to the user or
+machine credentials required by that route. Missing/invalid staging access
+fails closed before route execution. This operator-only gate is temporary and
+must not be embedded in a public app/website or treated as household authorization.
+The current uploader does not yet send the staging header. Do not install or
+enable it until the private staging test workflow is wired. Free-tier staging
+sleeping is not evidence of production availability.
+
 Both Sentra and the website use `https://caughtin4k.onrender.com` as their one
 public gateway. Render proxies devices, event history, account operations,
 telemetry, Pi model status, and training requests to the Pi's Ngrok tunnel.

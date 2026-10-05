@@ -89,6 +89,33 @@ class PiAuthorizationTests(unittest.TestCase):
         with patch.dict(os.environ, {"GHOST_ROUTER_TOKEN": ""}):
             self.assertEqual(self.client.get("/devices").status_code, 503)
 
+    def test_cloud_export_is_opt_in_private_and_metadata_only(self):
+        path = "/cloud-agent/snapshot"
+        headers = {"X-Gateway-Token": "private-gateway-test-token"}
+        self.assertEqual(self.client.get(path).status_code, 401)
+        with patch.dict(os.environ, {"GHOST_CLOUD_UPLOAD_ENABLED": "false"}):
+            self.assertEqual(self.client.get(path, headers=headers).status_code, 404)
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_UPLOAD_ENABLED": "true"}),
+            patch.object(router, "list_devices", return_value={"devices": [{
+                "mac": "aa:bb:cc:dd:ee:ff", "name": "Pi device", "ip_address": None,
+                "status": "WARNING", "attack_probability": 60, "blocked": False,
+                "raw_packets": "must-not-leave-Pi",
+            }]}),
+            patch.object(router.storage, "recent_events", return_value=[{
+                "id": 1, "mac": "aa:bb:cc:dd:ee:ff", "status": "ALERT",
+                "attack_probability": 0.75, "timestamp": 1770000000,
+            }]),
+        ):
+            response = self.client.get(path, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(set(result), {"observed_at", "devices", "alerts", "model"})
+        self.assertNotIn("raw_packets", result["devices"][0])
+        self.assertEqual(result["devices"][0]["status"], "WARNING")
+        self.assertEqual(result["alerts"][0]["attack_probability"], 75)
+        self.assertNotIn("training", result["model"])
+
     def test_coordinator_client_routes_require_private_token_not_user_session(self):
         payload = {"server_address": "192.168.50.198:8081"}
         self.assertEqual(

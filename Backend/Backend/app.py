@@ -230,6 +230,13 @@ def _read_real_feature_vector(device_id: str) -> np.ndarray:
 
 app = FastAPI(title="Signal Watch API", version="1.0.0")
 
+CLOUD_ACCOUNTS_ENABLED = os.getenv("GHOST_CLOUD_ACCOUNTS_ENABLED", "false").lower() == "true"
+if CLOUD_ACCOUNTS_ENABLED:
+    if len(os.getenv("GHOST_CLOUD_STAGING_TOKEN", "")) < 32:
+        raise ValueError("Cloud development mode requires a private GHOST_CLOUD_STAGING_TOKEN of at least 32 characters.")
+    from cloud_account_api import build_router
+    app.include_router(build_router(os.getenv("GHOST_CLOUD_SESSION_SECRET", "")))
+
 @app.middleware("http")
 async def require_gateway_session(request: Request, call_next):
     public_routes = {
@@ -237,7 +244,14 @@ async def require_gateway_session(request: Request, call_next):
         "/auth/request-password-reset", "/auth/reset-password",
     }
     context_token = None
-    if BACKEND_ROLE == "gateway" and request.method != "OPTIONS" and request.url.path not in public_routes:
+    cloud_route = CLOUD_ACCOUNTS_ENABLED and request.url.path.startswith("/cloud/")
+    if cloud_route:
+        staging_token = os.getenv("GHOST_CLOUD_STAGING_TOKEN", "")
+        if len(staging_token) < 32 or not hmac.compare_digest(
+            request.headers.get("X-Cloud-Staging-Token", "").encode(), staging_token.encode(),
+        ):
+            return JSONResponse(status_code=401, content={"detail": "Private cloud staging access required."})
+    if BACKEND_ROLE == "gateway" and not cloud_route and request.method != "OPTIONS" and request.url.path not in public_routes:
         try:
             request.state.user_email = verify_session(request.headers.get("Authorization", ""))
             context_token = CURRENT_USER_EMAIL.set(request.state.user_email)

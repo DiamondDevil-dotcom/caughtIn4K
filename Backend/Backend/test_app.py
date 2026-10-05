@@ -30,6 +30,30 @@ class GatewayTests(unittest.TestCase):
     def test_health_is_public(self):
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
 
+    def test_cloud_staging_requires_separate_private_access(self):
+        staging_token = "test-only-staging-token-at-least-32-characters"
+        with (
+            patch.object(backend, "CLOUD_ACCOUNTS_ENABLED", True),
+            patch.dict(os.environ, {"GHOST_CLOUD_STAGING_TOKEN": staging_token}),
+            patch.object(backend, "router_request") as router,
+        ):
+            for headers in ({}, self.headers, {"X-Cloud-Staging-Token": "wrong"}):
+                result = self.client.get("/cloud/unknown", headers=headers)
+                self.assertEqual(result.status_code, 401)
+            allowed = self.client.get(
+                "/cloud/unknown", headers={"X-Cloud-Staging-Token": staging_token},
+            )
+            self.assertEqual(allowed.status_code, 404)
+            self.assertEqual(self.client.get("/health").status_code, 200)
+        router.assert_not_called()
+
+    def test_cloud_staging_fails_closed_when_secret_missing(self):
+        with (
+            patch.object(backend, "CLOUD_ACCOUNTS_ENABLED", True),
+            patch.dict(os.environ, {"GHOST_CLOUD_STAGING_TOKEN": ""}),
+        ):
+            self.assertEqual(self.client.get("/cloud/unknown").status_code, 401)
+
     def test_devices_require_sign_in(self):
         self.assertEqual(self.client.get("/devices").status_code, 401)
 
