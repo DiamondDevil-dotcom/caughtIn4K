@@ -81,6 +81,14 @@ unrestricted forwarded-header trust on an internet-accessible backend.
 Local checks: backend customer/household/command tests, `flutter test`,
 `flutter analyze`, `flutter build apk --debug`, and website
 `node --test src/cloud-client.test.js` followed by `npm run build`.
+Mobile tabs switch directly with a short fade instead of paging through
+intermediate screens. Visited tabs retain their state and scroll position;
+hidden tab animations pause, while live monitoring providers keep polling.
+System reduced-motion settings disable the tab/navigation animations.
+Judge device animation performance using a profile or release APK, not debug.
+Account signup validates email syntax and field lengths before submission.
+Known account-validation errors are shown directly; unexpected server details
+are not displayed, and signup failures do not suggest device-control recovery.
 For opt-in live schema/email-token/session-revocation checks run
 `test_cloud_integration.py` privately after schema 5 is applied; email delivery
 is mocked in that suite and must also be checked with an actual account.

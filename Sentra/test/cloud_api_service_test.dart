@@ -57,6 +57,55 @@ void main() {
 
   tearDown(CloudApiService.disable);
 
+  test('signup validation reports the actual safe account error', () async {
+    for (final message in [
+      'Enter a valid email address.',
+      'Use a password between 8 and 1024 characters.',
+      'Use a name between 1 and 200 characters.',
+    ]) {
+      await http.runWithClient(
+        () async {
+          await expectLater(
+            CloudApiService.signup('Test', 'test@example.invalid', 'password'),
+            throwsA(
+              predicate(
+                (error) =>
+                    error is CloudRequestException &&
+                    error.status == 400 &&
+                    error.toString().contains(message) &&
+                    !error.toString().contains('command status'),
+              ),
+            ),
+          );
+        },
+        () => MockClient(
+          (_) async => http.Response(jsonEncode({'detail': message}), 400),
+        ),
+      );
+    }
+  });
+
+  test('signup does not expose unexpected server response details', () async {
+    for (final body in [
+      '{"detail":"private database diagnostic"}',
+      '<html>private database diagnostic</html>',
+    ]) {
+      await http.runWithClient(() async {
+        await expectLater(
+          CloudApiService.signup('Test', 'test@example.invalid', 'password'),
+          throwsA(
+            predicate(
+              (error) =>
+                  error.toString().contains('Check your name, email') &&
+                  !error.toString().contains('private database diagnostic') &&
+                  !error.toString().contains('command status'),
+            ),
+          ),
+        );
+      }, () => MockClient((_) async => http.Response(body, 400)));
+    }
+  });
+
   test(
     'signup conflict explains existing email instead of network commands',
     () async {

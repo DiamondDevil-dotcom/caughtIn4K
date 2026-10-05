@@ -43,9 +43,8 @@ class LiquidGlassNavigation extends StatelessWidget {
                   end: Alignment.bottomRight,
                   colors: [
                     ink.withValues(alpha: isDark ? 0.16 : 0.07),
-                    const Color(0xFF168B63).withValues(
-                      alpha: isDark ? 0.07 : 0.10,
-                    ),
+                    const Color(0xFF168B63)
+                        .withValues(alpha: isDark ? 0.07 : 0.10),
                     ink.withValues(alpha: isDark ? 0.05 : 0.025),
                   ],
                 ),
@@ -54,9 +53,8 @@ class LiquidGlassNavigation extends StatelessWidget {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF168B63).withValues(
-                      alpha: isDark ? 0.10 : 0.08,
-                    ),
+                    color: const Color(0xFF168B63)
+                        .withValues(alpha: isDark ? 0.10 : 0.08),
                     blurRadius: 24,
                     spreadRadius: 1,
                   ),
@@ -113,6 +111,9 @@ class _NavigationItemState extends State<_NavigationItem> {
     final selectedColor = isDark
         ? const Color(0xFF64E3A1)
         : const Color(0xFF168B63);
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
     return GestureDetector(
       onTap: widget.onTap,
       onTapDown: (_) => setState(() => pressed = true),
@@ -120,16 +121,16 @@ class _NavigationItemState extends State<_NavigationItem> {
       onTapCancel: () => setState(() => pressed = false),
       child: AnimatedScale(
         scale: pressed ? 0.92 : 1,
-        duration: const Duration(milliseconds: 220),
+        duration: duration,
         curve: Curves.easeOutCubic,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 360),
+          duration: duration,
           curve: Curves.easeOutQuart,
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(17),
             color: widget.selected
-              ? selectedColor.withValues(alpha: isDark ? 0.92 : 0.90)
+                ? selectedColor.withValues(alpha: isDark ? 0.92 : 0.90)
                 : Colors.transparent,
             boxShadow: widget.selected
                 ? [
@@ -145,8 +146,8 @@ class _NavigationItemState extends State<_NavigationItem> {
             children: [
               AnimatedScale(
                 scale: widget.selected ? 1.08 : 1.0,
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutBack,
+                duration: duration,
+                curve: Curves.easeOutCubic,
                 child: Icon(
                   widget.icon,
                   size: 21,
@@ -157,7 +158,7 @@ class _NavigationItemState extends State<_NavigationItem> {
               ),
               const SizedBox(height: 2),
               AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 260),
+                duration: duration,
                 curve: Curves.easeOutCubic,
                 style: TextStyle(
                   fontSize: widget.selected ? 10.5 : 10,

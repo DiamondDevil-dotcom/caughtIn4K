@@ -7,16 +7,18 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class CloudRequestException implements Exception {
   final int status;
-  CloudRequestException(this.status);
+  final String? message;
+  CloudRequestException(this.status, {this.message});
 
   @override
   String toString() =>
+      message ??
       'Cloud request failed (HTTP $status). '
-      '${status == 401
-          ? "Sign in again."
-          : status == 429
-          ? "Too many requests. Try again later."
-          : "Check home access or command status before retrying."}';
+          '${status == 401
+              ? "Sign in again."
+              : status == 429
+              ? "Too many requests. Try again later."
+              : "Check home access or command status before retrying."}';
 }
 
 class CloudApiService {
@@ -186,6 +188,48 @@ class CloudApiService {
           throw Exception(
             'An account with this email already exists. Sign in, or use Forgot password. To test isolation, use an email that has not been registered.',
           );
+        }
+        if (path == '/cloud/auth/signup') {
+          if (response.statusCode == 400) {
+            const safeMessages = {
+              'Enter a valid email address.',
+              'Use a password between 8 and 1024 characters.',
+              'Use a name between 1 and 200 characters.',
+            };
+            String message =
+                'Check your name, email address and password, then try again.';
+            try {
+              final errorBody = jsonDecode(response.body);
+              if (errorBody is Map<String, dynamic>) {
+                final detail = errorBody['detail'];
+                if (detail is String && safeMessages.contains(detail)) {
+                  message = detail;
+                }
+              }
+            } on FormatException {
+              message =
+                  'The account service returned an unreadable error (HTTP 400). '
+                  'Check your name, email address and password, then try again.';
+            }
+            throw CloudRequestException(400, message: message);
+          }
+          if (response.statusCode == 422) {
+            throw CloudRequestException(
+              422,
+              message:
+                  'Check your name, email address and password lengths. '
+                  'Use a name up to 200 characters, an email up to 254 characters '
+                  'and a password between 8 and 1024 characters.',
+            );
+          }
+          if (response.statusCode >= 500) {
+            throw CloudRequestException(
+              response.statusCode,
+              message:
+                  'The account service is temporarily unavailable '
+                  '(HTTP ${response.statusCode}). Try again shortly.',
+            );
+          }
         }
         throw CloudRequestException(response.statusCode);
       }

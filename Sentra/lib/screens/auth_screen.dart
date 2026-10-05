@@ -82,7 +82,11 @@ class _AuthScreenState extends State<AuthScreen> {
                         TextFormField(
                           controller: _nameController,
                           decoration: const InputDecoration(labelText: 'Full name', prefixIcon: Icon(Icons.person_outline)),
-                          validator: (value) => value == null || value.trim().isEmpty ? 'Enter your name' : null,
+                          validator: (value) {
+                            final name = value?.trim() ?? '';
+                            if (name.isEmpty) return 'Enter your name';
+                            return name.length > 200 ? 'Use a name up to 200 characters' : null;
+                          },
                         ),
                         const SizedBox(height: 16),
                       ],
@@ -103,15 +107,26 @@ class _AuthScreenState extends State<AuthScreen> {
                       TextFormField(
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
+                        autocorrect: false,
+                        enableSuggestions: false,
                         decoration: const InputDecoration(labelText: 'Email address', prefixIcon: Icon(Icons.mail_outline)),
-                        validator: (value) => value == null || !value.contains('@') ? 'Enter a valid email' : null,
+                        validator: (value) {
+                          final email = value?.trim() ?? '';
+                          return email.length > 254 ||
+                                  !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)
+                              ? 'Enter a valid email address'
+                              : null;
+                        },
                       ),
                       const SizedBox(height: 16),
                       TextFormField(
                         controller: _passwordController,
                         obscureText: true,
                         decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline)),
-                        validator: (value) => value == null || value.length < 8 ? 'Use at least 8 characters' : null,
+                        validator: (value) {
+                          if (value == null || value.length < 8) return 'Use at least 8 characters';
+                          return value.length > 1024 ? 'Use a password up to 1024 characters' : null;
+                        },
                       ),
                     ],
                   ),

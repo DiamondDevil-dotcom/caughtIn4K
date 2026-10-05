@@ -8,6 +8,7 @@ import 'settings_screen.dart';
 import 'demo_control_screen.dart';
 import '../providers/demo_mode_provider.dart';
 import '../widgets/liquid_glass_navigation.dart';
+import '../widgets/retained_tab_view.dart';
 import '../services/router_api_service.dart';
 
 class NavigationScreen extends StatefulWidget {
@@ -19,37 +20,26 @@ class NavigationScreen extends StatefulWidget {
 
 class _NavigationScreenState extends State<NavigationScreen> {
   int currentIndex = 0;
-  late final PageController _pageController;
 
   List<Widget> _pages(bool demoMode) => [
-        const HomeScreen(),
-        const DevicesScreen(),
-        const ActivityScreen(),
-        const SettingsScreen(),
-        if (demoMode) const DemoControlScreen(),
-      ];
+    const HomeScreen(),
+    const DevicesScreen(),
+    const ActivityScreen(),
+    const SettingsScreen(),
+    if (demoMode) const DemoControlScreen(),
+  ];
 
   List<(IconData, IconData, String)> _navItems(bool demoMode) => [
-        ...LiquidGlassNavigation.defaultItems,
-        if (demoMode) (Icons.science_outlined, Icons.science, "Demo"),
-      ];
-
-  @override
-  void initState() {
-    super.initState();
-    _pageController = PageController();
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
-  }
+    ...LiquidGlassNavigation.defaultItems,
+    if (demoMode) (Icons.science_outlined, Icons.science, "Demo"),
+  ];
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final demoMode = context.watch<DemoModeProvider>().enabled && !RouterApiService.cloudMode;
+    final demoMode =
+        context.watch<DemoModeProvider>().enabled &&
+        !RouterApiService.cloudMode;
     final pages = _pages(demoMode);
     final safeIndex = currentIndex < pages.length ? currentIndex : 0;
     return Scaffold(
@@ -74,26 +64,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   ],
           ),
         ),
-        child: PageView(
-          controller: _pageController,
-          physics: const NeverScrollableScrollPhysics(),
-          onPageChanged: (index) => setState(() => currentIndex = index),
-          children: pages,
-        ),
+        child: RetainedTabView(index: safeIndex, children: pages),
       ),
 
-      bottomNavigationBar: LiquidGlassNavigation(
-        items: _navItems(demoMode),
-        selectedIndex: safeIndex,
-        onSelected: (index) {
-          if (index == currentIndex) return;
-          _pageController.animateToPage(
-            index,
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
-          );
-          setState(() => currentIndex = index);
-        },
+      bottomNavigationBar: RepaintBoundary(
+        child: LiquidGlassNavigation(
+          items: _navItems(demoMode),
+          selectedIndex: safeIndex,
+          onSelected: (index) {
+            if (index == safeIndex) return;
+            setState(() => currentIndex = index);
+          },
+        ),
       ),
     );
   }

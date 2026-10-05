@@ -197,6 +197,37 @@ void main() {
     );
   });
 
+  testWidgets('Signup rejects malformed email before contacting the server', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ChangeNotifierProvider(
+        create: (_) => AuthProvider(),
+        child: const MaterialApp(home: AuthScreen()),
+      ),
+    );
+    await tester.tap(find.text('New here? Create an account'));
+    await tester.pump();
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.at(0), 'Second account');
+    await tester.enterText(fields.at(1), 'second@ gmail.com');
+    await tester.enterText(fields.at(2), 'valid-password');
+    var requests = 0;
+    await http.runWithClient(
+      () async {
+        await tester.ensureVisible(find.text('Create account'));
+        await tester.tap(find.text('Create account'));
+        await tester.pump();
+      },
+      () => MockClient((_) async {
+        requests++;
+        return reply({'detail': 'Unexpected request'}, 400);
+      }),
+    );
+    expect(find.text('Enter a valid email address'), findsOneWidget);
+    expect(requests, 0);
+  });
+
   testWidgets(
     'customer sign-in and signup never show server, mode, or access-token fields',
     (tester) async {
