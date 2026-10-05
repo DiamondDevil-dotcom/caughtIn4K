@@ -203,6 +203,16 @@ The current uploader does not yet send the staging header. Do not install or
 enable it until the private staging test workflow is wired. Free-tier staging
 sleeping is not evidence of production availability.
 
+For the separate cloud staging service, use root `Backend/Backend`, build
+`pip install -r requirements_cloud.txt`, and start
+`uvicorn cloud_staging_app:app --host 0.0.0.0 --port $PORT`.
+Set health path `/health`. This entry point does not import Torch, load an
+inference checkpoint, or expose legacy Pi/coordinator routes. Its dependencies
+exclude GPU/CUDA packages. The Pi and laptop continue using their existing
+requirements and entry points; real federated training is not removed.
+Staging requires the database URL, cloud session secret, and staging token.
+Its public health check proves process readiness, not database connectivity.
+
 Both Sentra and the website use `https://caughtin4k.onrender.com` as their one
 public gateway. Render proxies devices, event history, account operations,
 telemetry, Pi model status, and training requests to the Pi's Ngrok tunnel.
