@@ -1,4 +1,5 @@
 import unittest
+import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -40,6 +41,44 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(caught.exception.status_code, status)
             self.assertEqual(self.db.execute.call_count, 1)
             self.assertEqual(self.db.execute.call_args.args[1], (self.gateway, self.home, self.account))
+
+    def test_registration_accepts_new_device_only_after_explicit_pi_rollout(self):
+        payload = commands.CommandInput(command_id=self.command_id, action="register",
+            mac=self.payload.mac, device_name="New sensor", ip_address="")
+        with patch.dict(os.environ, {"GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED": "false"}):
+            with self.assertRaises(HTTPException) as caught:
+                commands.create_command(self.account, self.home, self.gateway, payload)
+            self.assertEqual(caught.exception.status_code, 503)
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED": "true"}),
+            patch.object(commands, "connect", side_effect=lambda: self.connection([
+                {"role": "owner"}, None, None, None,
+                {**self.command, "action": "register", "device_name": "New sensor", "ip_address": ""},
+            ])),
+        ):
+            self.assertEqual(commands.create_command(self.account, self.home, self.gateway, payload)["action"], "register")
+        self.assertEqual(self.db.execute.call_args.args[1][-2:], ("New sensor", ""))
+
+    def test_registration_details_are_validated_and_bound_to_idempotency(self):
+        for changes in (
+            {"device_name": " "}, {"ip_address": "https://example.invalid"},
+            {"ip_address": "127.0.0.1;reboot"}, {"device_name": None},
+        ):
+            with self.assertRaises(ValidationError):
+                commands.CommandInput(command_id=self.command_id, action="register", mac=self.payload.mac,
+                    **{"device_name": "Sensor", "ip_address": "", **changes})
+        with self.assertRaises(ValidationError):
+            commands.CommandInput(**{**self.payload.model_dump(), "device_name": "unexpected"})
+        payload = commands.CommandInput(command_id=self.command_id, action="register",
+            mac=self.payload.mac, device_name="Sensor", ip_address="")
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED": "true"}),
+            patch.object(commands, "connect", side_effect=lambda: self.connection([
+                {"role": "owner"}, {**self.command, "action": "register", "device_name": "Other", "ip_address": ""},
+            ])),
+            self.assertRaises(HTTPException),
+        ):
+            commands.create_command(self.account, self.home, self.gateway, payload)
 
     def test_owner_and_admin_queue_but_do_not_mark_success(self):
         for role in ("owner", "admin"):

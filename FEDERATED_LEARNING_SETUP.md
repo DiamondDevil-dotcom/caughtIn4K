@@ -19,11 +19,10 @@ token, or connection mode. New users verify email and pair the Pi using its
 one-time setup QR label, or accept a household invitation. One home opens
 automatically; **Your home / Manage homes** allows selecting or adding homes.
 
-The customer app and website are implemented locally, not automatically
-deployed. The earlier private staging service and installed staging APK remain
-in use until the following deliberate rollout:
+Building locally does not deploy the customer app, website, backend, or Pi
+worker. Use the following deliberate rollout for a new installation or update:
 
-1. Apply schema version **4** with the private `cloud_database.py init` command
+1. Apply schema version **5** with the private `cloud_database.py init` command
    below, then run `cloud_database.py check`. This is additive: accounts,
    password hashes, memberships, gateways and Pi data are retained. Existing
    accounts are **not** falsely marked email-verified; they confirm their email
@@ -34,6 +33,8 @@ in use until the following deliberate rollout:
    `GHOST_SMTP_USERNAME`, `GHOST_SMTP_PASSWORD`, and `GHOST_SMTP_FROM`.
    Use an app password where required by the email provider. Never put these
    credentials in chat, Git, the app, or `VITE_` variables.
+   Render Free blocks outbound SMTP ports 25, 465 and 587. Gmail SMTP requires
+   a paid Render instance; otherwise use a supported HTTPS mail integration.
 3. Set `GHOST_CLOUD_WEB_ORIGINS` to the exact deployed HTTPS website origin
    (comma-separated if there are several). No wildcard, path or trailing slash
    is accepted. An empty list permits mobile access but not browser access.
@@ -81,7 +82,7 @@ Local checks: backend customer/household/command tests, `flutter test`,
 `flutter analyze`, `flutter build apk --debug`, and website
 `node --test src/cloud-client.test.js` followed by `npm run build`.
 For opt-in live schema/email-token/session-revocation checks run
-`test_cloud_integration.py` privately after schema 4 is applied; email delivery
+`test_cloud_integration.py` privately after schema 5 is applied; email delivery
 is mocked in that suite and must also be checked with an actual account.
 The live suite creates and deletes only its uniquely named test records.
 
@@ -90,6 +91,52 @@ a completed FL round. Genuine laptop/Pi Flower training remains operational
 through the existing coordinator workflow below, not the customer service.
 Production availability and email delivery must be tested separately;
 a sleeping free-tier instance is not an always-available smart-home service.
+
+### Restoring remote Add/Remove controls
+
+Schema 5 expands the existing outbound queue with bounded `register` and
+`remove` actions. Registration accepts only a device name, MAC address and
+optional IPv4 address; it is not a shell-command or arbitrary-payload channel.
+Removal clears firewall enforcement before deleting the record and its
+detection history. It does not disconnect Wi-Fi permanently: a removed device
+can still use the access point but is hidden from monitoring until re-added.
+
+Roll out in this order:
+
+1. Apply and check schema 5 **before** deploying the updated command backend.
+   Even Block/Unblock inserts now reference its additive columns. Keep
+   `GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED` absent or `false` in the cloud.
+2. Back up and update both `router_ids_agent.py` and `cloud_control_agent.py`
+   in the existing Pi service directory. Preserve databases, datasets,
+   checkpoints, environment secrets and network configuration.
+3. Check both files with the Pi service's Python interpreter. Confirm no
+   federated training is running before restarting the router. Enable
+   `GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED=true` in the router environment,
+   restart the router and control worker, and verify both are active. Retain
+   the existing loopback/token restrictions and cloud-control flag.
+4. Deploy the backend; verify fresh snapshots and existing Block/Unblock.
+   Only after both Pi components are updated, enable
+   `GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED=true` on the cloud service.
+   The snapshot capability comes from this rollout flag, not automatic
+   machine-version attestation, so never enable it ahead of the Pi update.
+5. Build/install the updated consumer app and deploy the rebuilt website.
+   Owners/admins get Add/Remove; members remain read-only. Use a nonessential
+   test device to verify Add, Remove, re-add and Block/Unblock from each
+   deployed client. Do not use the controller, uplink, or FL laptop as targets.
+
+Clients wait for the Pi's applied acknowledgement. Old snapshots must not
+restore a removed device or contradict a confirmed Block/Unblock button.
+An added device may take up to 30 seconds to appear in the next upload.
+On an unknown outcome, check the saved command instead of submitting again.
+The dashboard reports Devices, Threats and Blocked separately; a manual block
+does not by itself prove an attack, and stale/empty data is not "Protected".
+
+The demo sender remains on the original gateway's `/auth/login` and
+`/telemetry` routes, not the customer service. Its Pi account password is not
+synchronized with a later cloud password reset. A timeout is a connectivity
+failure, not an invalid-password response: check the original gateway and
+Pi tunnel, then retry only after connectivity returns. A health response
+alone does not prove login forwarding; validate the actual login round-trip.
 
 ## Earlier foundation and legacy gateway procedures
 

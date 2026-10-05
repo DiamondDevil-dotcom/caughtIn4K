@@ -814,34 +814,49 @@ def _stop_pi_federated_client():
 @app.post("/devices/register")
 def register_device(payload: RegisterDevicePayload, request: Request):
     require_household_admin(request)
-    require_household_admin(request)
+    return apply_device_registration(payload)
+
+
+def apply_device_registration(payload: RegisterDevicePayload):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Device name is required.")
     mac = payload.mac.strip().lower()
     if is_excluded_device(mac):
         raise HTTPException(status_code=400, detail="This MAC address is reserved for the federated-learning server.")
-    storage.restore_device(mac)
-    ip_address = (payload.ip_address or "").strip() or resolve_ip_from_neighbor_table(mac)
-    state = registry.get_or_create(
-        mac,
-        name=name,
-        ip_address=ip_address,
-    )
-    state.name = name
-    if ip_address:
-        state.ip_address = ip_address
-    storage.upsert_device(state)
-    return state.to_dict()
+    with _device_control_lock:
+        storage.restore_device(mac)
+        ip_address = (payload.ip_address or "").strip() or resolve_ip_from_neighbor_table(mac)
+        state = registry.get_or_create(
+            mac,
+            name=name,
+            ip_address=ip_address,
+        )
+        state.name = name
+        if ip_address:
+            state.ip_address = ip_address
+        storage.upsert_device(state)
+        return state.to_dict()
 
 
 @app.delete("/devices/{mac}")
 def delete_device(mac: str, request: Request):
-    normalized = mac.strip().lower()
     require_household_admin(request)
-    _ensure_household_device(normalized)
-    registry.remove(normalized)
-    storage.delete_device(normalized)
+    return apply_device_removal(mac)
+
+
+def apply_device_removal(mac: str):
+    normalized = mac.strip().lower()
+    if is_excluded_device(normalized):
+        raise HTTPException(status_code=400, detail="The federated-learning server is not managed as an IoT device.")
+    with _device_control_lock:
+        _ensure_household_device(normalized)
+        # Firewall rules may survive a process restart without an in-memory state.
+        result = apply_device_control(normalized, "unblock")
+        if not result["success"]:
+            raise HTTPException(status_code=503, detail="Could not unblock device before removal.")
+        storage.delete_device(normalized)
+        registry.remove(normalized)
     return {"success": True, "mac": normalized}
 
 
@@ -980,7 +995,7 @@ def force_block(mac: str, request: Request):
     return apply_device_control(mac, "block")
 
 
-_device_control_lock = threading.Lock()
+_device_control_lock = threading.RLock()
 
 
 def apply_device_control(mac: str, action: Literal["block", "unblock"]):
@@ -1008,9 +1023,11 @@ def apply_device_control(mac: str, action: Literal["block", "unblock"]):
 class CloudControlPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command_id: UUID
-    action: Literal["block", "unblock"]
+    action: Literal["block", "unblock", "register", "remove"]
     mac: str = Field(pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
     expires_at: datetime
+    device_name: str | None = Field(default=None, min_length=1, max_length=200)
+    ip_address: str | None = Field(default=None, max_length=15)
 
 
 @app.post("/cloud-agent/control")
@@ -1021,7 +1038,30 @@ def cloud_device_control(payload: CloudControlPayload, request: Request):
         raise HTTPException(status_code=403, detail="Cloud controls require a loopback connection.")
     if payload.expires_at.tzinfo is None or payload.expires_at <= datetime.now(timezone.utc):
         return {"success": False, "result_code": "expired"}
-    result = apply_device_control(payload.mac, payload.action)
+    if payload.action in {"register", "remove"} and os.getenv(
+        "GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED", "false"
+    ).lower() != "true":
+        raise HTTPException(status_code=404, detail="Cloud device management is disabled.")
+    if payload.action == "register":
+        from ipaddress import IPv4Address
+        if not payload.device_name or payload.device_name != payload.device_name.strip() or payload.ip_address is None:
+            raise HTTPException(status_code=422, detail="Device registration details are invalid.")
+        try:
+            if payload.ip_address:
+                IPv4Address(payload.ip_address)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Device IPv4 address is invalid.") from None
+        apply_device_registration(RegisterDevicePayload(
+            name=payload.device_name, mac=payload.mac, ip_address=payload.ip_address,
+        ))
+        result = {"success": True}
+    else:
+        if payload.device_name is not None or payload.ip_address is not None:
+            raise HTTPException(status_code=422, detail="Unexpected device registration details.")
+        if payload.action == "remove":
+            result = apply_device_removal(payload.mac)
+        else:
+            result = apply_device_control(payload.mac, payload.action)
     if not result["success"]:
         print(f"[cloud-control] Network enforcement failed: {result['detail']}", flush=True)
     return {

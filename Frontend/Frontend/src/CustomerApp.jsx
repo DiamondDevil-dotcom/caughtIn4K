@@ -80,19 +80,22 @@ export default function CustomerApp() {
   async function control(device) {
     const action = device.blocked ? "unblock" : "block";
     if (!window.confirm(`${action.toUpperCase()} ${device.name} (${device.mac})?\nBlocking your current phone can disconnect it. Keep another connection available.`)) return;
-    await run(async () => {
+    await run(() => execute(device.mac, action));
+  }
+
+  async function execute(mac, action, details = {}) {
       const version = cloud.generation;
-      await cloud.submit(device.mac, action);
+      await cloud.submit(mac, action, details);
       setMessage("Command queued. Waiting for the Pi—not yet confirmed.");
       const deadline = Date.now() + 150_000;
       while (Date.now() < deadline) {
         if (version !== cloud.generation) throw new Error("Account changed; check the command before retrying.");
         const result = await cloud.commandStatus();
         if (result.status === "succeeded") {
-          setMessage("Pi confirmed network enforcement. Snapshot updates may take up to 30 seconds.");
-          // Confirmed state prevents a second Block while awaiting refreshed metadata.
-          setSnapshot((old) => old ? { ...old, devices: old.devices.map((row) =>
-            row.mac === device.mac ? { ...row, blocked: action === "block", status: action === "block" ? "BLOCKED" : "SAFE" } : row) } : old);
+          setMessage(action === "register"
+            ? "Device added on your Pi. It may take up to 30 seconds to appear."
+            : "Your Pi confirmed the device action.");
+          setSnapshot(await cloud.snapshot());
           return;
         }
         if (!["queued", "delivered"].includes(result.status)) {
@@ -101,7 +104,6 @@ export default function CustomerApp() {
         await new Promise((resolve) => setTimeout(resolve, 3000));
       }
       throw new Error("Timed out. Check command status before retrying.");
-    });
   }
 
   return <main className="customer-app">
@@ -168,7 +170,7 @@ export default function CustomerApp() {
     </section> : <>
       <section className="customer-panel"><h2>{home.name}</h2><p>{home.gateway_name} · {home.role}</p>
         <button disabled={busy} onClick={() => { choosingHome.current = true; cloud.select(null); setHome(null); setSnapshot(null); }}>Manage homes</button>
-        <p>{stale ? "Gateway offline or data stale. Showing last-known information." : "Recent Pi snapshot. Device presence is last-known."}</p>
+        <p>{stale ? "Your home is offline or updates are delayed. Showing the last update." : "Your home is connected. Updates may take up to 30 seconds."}</p>
         {snapshot && <p>Updated: {new Date(snapshot.observed_at).toLocaleString()}</p>}
       </section>
       <section className="customer-panel"><h2>Devices</h2>
@@ -179,17 +181,31 @@ export default function CustomerApp() {
             <p>{device.status} · {device.attack_probability}% attack probability</p></div>
           <button disabled={busy || stale || !canControl || cloud.pending?.unconfirmed}
             onClick={() => control(device)}>{busy && cloud.pending?.mac === device.mac ? "Waiting for Pi..." : device.blocked ? "Unblock" : "Block"}</button>
+          {canControl && <button disabled={busy || stale || cloud.pending?.unconfirmed} onClick={() => {
+            if (window.confirm(`Remove ${device.name}? Its device record and detection history will be deleted on the Pi. A blocked device will first be unblocked.`)) {
+              run(() => execute(device.mac, "remove"));
+            }
+          }}>Remove</button>}
         </article>)}
-        {!canControl && <p>Read-only: only owners/admins can block or unblock.</p>}
-        {cloud.pending && <><p>Last command: {cloud.pending.id}</p><button disabled={busy} onClick={() => run(async () => {
+        {canControl && <form onSubmit={(event) => {
+          const data = values(event);
+          run(() => execute(data.mac.trim().toLowerCase(), "register", {device_name: data.name, ip_address: data.ip.trim()}));
+        }}>
+          <h3>Add device</h3>
+          <label>Device name<input name="name" required maxLength={200} /></label>
+          <label>MAC address<input name="mac" required pattern="([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}" /></label>
+          <label>IP address (optional)<input name="ip" /></label>
+          <button disabled={busy || stale || cloud.pending?.unconfirmed}>Add device</button>
+        </form>}
+        {!canControl && <p>Read-only: only owners/admins can manage devices.</p>}
+        {cloud.pending?.unconfirmed && <><p>A device action is awaiting confirmation.</p><button disabled={busy} onClick={() => run(async () => {
           const result = await cloud.commandStatus();
-          setMessage(`Command: ${result.status}. Only succeeded confirms enforcement.`);
+          setMessage(result.status === "succeeded" ? "Your Pi confirmed the device action." : `Device action: ${result.status}. Check before retrying.`);
           if (result.status === "succeeded") setSnapshot(await cloud.snapshot());
         })}>Check command status</button></>}
       </section>
-      <section className="customer-panel"><h2>Pi model</h2>
-        <p>{snapshot?.model.available ? `Checkpoint available: ${snapshot.model.checkpoint_name || "unnamed"}` : "Model availability not confirmed."}</p>
-        <p>Model availability is not proof of a completed federated round. Federated training remains on the laptop and Pi.</p>
+      <section className="customer-panel"><h2>Threat detection</h2>
+        <p>{snapshot?.model.available ? "Detection model available on your home gateway." : "Waiting for a detection-model update from your home gateway."}</p>
       </section>
       <section className="customer-panel"><h2>Recent alerts</h2>
         {snapshot?.alerts.map((alert) => <p key={alert.event_id}>

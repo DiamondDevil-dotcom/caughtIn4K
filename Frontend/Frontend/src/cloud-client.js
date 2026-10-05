@@ -12,6 +12,7 @@ export class CloudClient {
     this.home = null;
     this.submitting = false;
     this.confirmed = new Map();
+    this.removed = new Map();
   }
 
   async request(method, path, body, expected = 200) {
@@ -47,6 +48,7 @@ export class CloudClient {
     this.account = account;
     this.home = null;
     this.confirmed.clear();
+    this.removed.clear();
     this.pending = JSON.parse(this.storage.getItem(`customer-command:${account.account_id}`) || "null");
     this.storage.setItem("customer-account", JSON.stringify(account));
     return account;
@@ -56,6 +58,7 @@ export class CloudClient {
     this.generation++;
     this.account = this.home = null;
     this.confirmed.clear();
+    this.removed.clear();
     this.pending = null;
     this.storage.removeItem("customer-account");
     // Retain an unresolved command UUID for recovery, not credentials.
@@ -86,6 +89,7 @@ export class CloudClient {
     this.generation++;
     this.home = home;
     this.confirmed.clear();
+    this.removed.clear();
   }
 
   path() {
@@ -101,37 +105,51 @@ export class CloudClient {
         !snapshot.model || !Number.isFinite(Date.parse(snapshot.observed_at))) {
       throw new Error("No valid snapshot available yet.");
     }
+    const observed = Date.parse(snapshot.observed_at);
+    for (const [mac, confirmation] of this.confirmed) {
+      if (observed >= confirmation.completedAt) this.confirmed.delete(mac);
+    }
+    for (const [mac, completed] of this.removed) {
+      if (observed >= completed) this.removed.delete(mac);
+    }
     for (const device of snapshot.devices) {
       const confirmation = this.confirmed.get(device.mac);
       if (!confirmation) continue;
-      if (Date.parse(snapshot.observed_at) >= confirmation.completedAt) {
-        this.confirmed.delete(device.mac);
-      } else {
-        device.blocked = confirmation.blocked;
-        device.status = confirmation.blocked ? "BLOCKED" : "SAFE";
-      }
+      device.blocked = confirmation.blocked;
+      device.status = confirmation.blocked ? "BLOCKED" : device.status === "BLOCKED" ? "SAFE" : device.status;
     }
+    snapshot.devices = snapshot.devices.filter((device) => !this.removed.has(device.mac));
     return snapshot;
   }
 
-  async submit(mac, action) {
+  async submit(mac, action, details = {}) {
     if (this.submitting || this.pending?.unconfirmed) throw new Error("Check the previous command before sending another.");
     if (!["owner", "admin"].includes(this.home?.role)) throw new Error("Only owners/admins can control the network.");
-    if (!["block", "unblock"].includes(action) || !/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac)) {
+    if (!["block", "unblock", "register", "remove"].includes(action) || !/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac)) {
       throw new Error("Invalid device action.");
     }
     this.submitting = true;
     try {
     const snapshot = await this.snapshot();
+    if (["register", "remove"].includes(action) && !snapshot.device_management_available) {
+      throw new Error("Device management requires the Pi update. No command sent.");
+    }
+    if (action === "register" && (typeof details.device_name !== "string" || !details.device_name.trim() ||
+        details.device_name.length > 200 || typeof details.ip_address !== "string")) {
+      throw new Error("Enter a device name and optional IPv4 address.");
+    }
     if (snapshot.data_stale || !snapshot.recent_contact ||
         Date.now() - Date.parse(snapshot.observed_at) > 90_000) throw new Error("Gateway offline or stale. No command sent.");
     const id = globalThis.crypto.randomUUID();
     const path = this.path();
-    if (!snapshot.devices.some((device) => device.mac === mac)) throw new Error("Device is no longer reported by this Pi.");
+    if (action !== "register" && !snapshot.devices.some((device) => device.mac === mac)) throw new Error("Device is no longer reported by this Pi.");
     this.pending = { id, path, gateway_id: this.home.gateway_id, mac, action, unconfirmed: true };
     this.storage.setItem(`customer-command:${this.account.account_id}`, JSON.stringify(this.pending));
     try {
-      const response = await this.request("POST", `${path}/commands`, { command_id: id, mac, action }, 202);
+      const response = await this.request("POST", `${path}/commands`, {
+        command_id: id, mac, action,
+        ...(action === "register" ? {device_name: details.device_name.trim(), ip_address: details.ip_address} : {}),
+      }, 202);
       if (response.id !== id || response.gateway_id !== this.home.gateway_id ||
           response.mac !== mac || response.action !== action) throw new Error("Invalid command acknowledgement.");
     } catch (error) {
@@ -154,11 +172,14 @@ export class CloudClient {
     if (result.id !== id || result.gateway_id !== gateway_id || result.mac !== mac || result.action !== action ||
         !["queued", "delivered", "succeeded", "failed", "expired", "cancelled", "unknown"].includes(result.status) ||
         (result.status === "succeeded" && result.result_code !== "applied")) throw new Error("Invalid command result.");
-    if (result.status === "succeeded" && gateway_id === this.home?.gateway_id) {
+    if (result.status === "succeeded" && gateway_id === this.home?.gateway_id && ["block", "unblock"].includes(action)) {
       this.confirmed.set(mac, {
         blocked: action === "block",
         completedAt: Date.parse(result.completed_at) || Date.now(),
       });
+    }
+    if (result.status === "succeeded" && gateway_id === this.home?.gateway_id && action === "remove") {
+      this.removed.set(mac, Date.parse(result.completed_at) || Date.now());
     }
     if (["succeeded", "failed", "expired", "cancelled"].includes(result.status)) {
       this.pending.unconfirmed = false;

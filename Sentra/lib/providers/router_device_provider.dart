@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/notification_service.dart';
@@ -27,21 +28,83 @@ class RouterDeviceProvider extends ChangeNotifier {
   String? pendingControlMac;
   final Map<String, bool> confirmedControls = {};
   final Map<String, DateTime> _confirmedAt = {};
+  final Map<String, DateTime> _removedAt = {};
 
-  void recordConfirmedControl(String mac, bool blocked, {DateTime? completedAt}) {
+  List<Map<String, dynamic>> get displayedDevices => devices
+      .where((device) => !_removedAt.containsKey(device['mac']))
+      .map((device) {
+        final override = confirmedControls[device['mac']];
+        if (override == null) return device;
+        return {
+          ...device,
+          'blocked': override,
+          'status': override
+              ? 'BLOCKED'
+              : device['status'] == 'BLOCKED'
+              ? 'SAFE'
+              : device['status'],
+        };
+      })
+      .toList();
+
+  void recordConfirmedControl(
+    String mac,
+    bool blocked, {
+    DateTime? completedAt,
+  }) {
     confirmedControls[mac] = blocked;
     _confirmedAt[mac] = completedAt ?? DateTime.now();
     if (!_disposed) notifyListeners();
   }
+
+  void recordConfirmedRemoval(String mac, {DateTime? completedAt}) {
+    _removedAt[mac] = completedAt ?? DateTime.now();
+    confirmedControls.remove(mac);
+    _confirmedAt.remove(mac);
+    _lastStatusByMac.remove(mac);
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> checkCommandStatus() async {
+    final version = RouterApiService.sessionGeneration;
+    final mac = CloudApiService.lastCommandMac;
+    final action = CloudApiService.lastCommandAction;
+    final result = await CloudApiService.commandStatus();
+    if (version != RouterApiService.sessionGeneration || _disposed) {
+      throw Exception(
+        'Home changed. Check command status in the original home.',
+      );
+    }
+    if (result['status'] == 'succeeded' && mac != null) {
+      final completed = DateTime.tryParse(
+        result['completed_at'] as String? ?? '',
+      );
+      if (action == 'remove') {
+        recordConfirmedRemoval(mac, completedAt: completed);
+      } else if (action == 'block' || action == 'unblock') {
+        recordConfirmedControl(mac, action == 'block', completedAt: completed);
+      }
+    }
+    await refresh();
+    return result;
+  }
+
   bool get cloudDataStale {
     final snapshot = CloudApiService.lastSnapshot;
-    final observed = DateTime.tryParse(snapshot?['observed_at'] as String? ?? '');
-    return lastError != null || snapshot == null || snapshot['data_stale'] == true || snapshot['recent_contact'] != true ||
-        observed == null || DateTime.now().difference(observed).inSeconds > 90;
+    final observed = DateTime.tryParse(
+      snapshot?['observed_at'] as String? ?? '',
+    );
+    return lastError != null ||
+        snapshot == null ||
+        snapshot['data_stale'] == true ||
+        snapshot['recent_contact'] != true ||
+        observed == null ||
+        DateTime.now().difference(observed).inSeconds > 90;
   }
+
   String get cloudFreshness => cloudDataStale
-      ? 'Last-known cloud data (stale/offline). Network controls require a fresh gateway snapshot.'
-      : 'Cloud snapshot refreshed by Pi. Device presence is last-known, not a live Wi-Fi connection count.';
+      ? 'Your home is offline or updates are delayed. Showing the last update.'
+      : 'Your home is connected. Updates may take up to 30 seconds.';
 
   void clearCachedData() {
     devices = [];
@@ -53,6 +116,7 @@ class RouterDeviceProvider extends ChangeNotifier {
     lastError = null;
     confirmedControls.clear();
     _confirmedAt.clear();
+    _removedAt.clear();
     _lastCloudFetch = null;
     notifyListeners();
   }
@@ -76,13 +140,19 @@ class RouterDeviceProvider extends ChangeNotifier {
   }
 
   Future<void> _fetchFederatedStatus() async {
-    if (_disposed || RouterApiService.cloudMode || _fetchingFederatedStatus || !RouterApiService.hasSession) return;
+    if (_disposed ||
+        RouterApiService.cloudMode ||
+        _fetchingFederatedStatus ||
+        !RouterApiService.hasSession) {
+      return;
+    }
     _fetchingFederatedStatus = true;
     final requestedUrl = RouterApiService.baseUrl;
     final requestedSession = RouterApiService.sessionGeneration;
     try {
       final fetched = await RouterApiService.federatedStatus();
-      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+      if (_disposed ||
+          requestedUrl != RouterApiService.baseUrl ||
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }
@@ -97,7 +167,8 @@ class RouterDeviceProvider extends ChangeNotifier {
         federatedTrainingMessage = 'Federated training completed.';
       }
     } catch (error) {
-      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+      if (_disposed ||
+          requestedUrl != RouterApiService.baseUrl ||
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }
@@ -115,12 +186,14 @@ class RouterDeviceProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final result = await RouterApiService.startFederatedTraining();
-      federatedTrainingMessage = result["message"] as String? ?? "Federated training started.";
+      federatedTrainingMessage =
+          result["message"] as String? ?? "Federated training started.";
       await _fetchFederatedStatus();
     } catch (error) {
-      federatedTrainingMessage = error
-          .toString()
-          .replaceFirst(RegExp(r'^Exception:\s*'), '');
+      federatedTrainingMessage = error.toString().replaceFirst(
+        RegExp(r'^Exception:\s*'),
+        '',
+      );
     } finally {
       federatedTrainingStarting = false;
       notifyListeners();
@@ -129,7 +202,8 @@ class RouterDeviceProvider extends ChangeNotifier {
 
   Future<void> _fetch() async {
     if (_disposed || _fetchingDevices || !RouterApiService.hasSession) return;
-    if (RouterApiService.cloudMode && _lastCloudFetch != null &&
+    if (RouterApiService.cloudMode &&
+        _lastCloudFetch != null &&
         DateTime.now().difference(_lastCloudFetch!).inSeconds < 15) {
       notifyListeners();
       return;
@@ -140,28 +214,39 @@ class RouterDeviceProvider extends ChangeNotifier {
     final requestedSession = RouterApiService.sessionGeneration;
     try {
       final fetched = await RouterApiService.devices();
-      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+      if (_disposed ||
+          requestedUrl != RouterApiService.baseUrl ||
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }
       if (!RouterApiService.cloudMode) _notifyOnChanges(fetched);
       if (RouterApiService.cloudMode) {
-        federatedStatus = {'cloud_model': CloudApiService.lastSnapshot?['model']};
+        federatedStatus = {
+          'cloud_model': CloudApiService.lastSnapshot?['model'],
+        };
         federatedStatusError = null;
-        final observed = DateTime.tryParse(CloudApiService.lastSnapshot?['observed_at'] as String? ?? '');
+        final observed = DateTime.tryParse(
+          CloudApiService.lastSnapshot?['observed_at'] as String? ?? '',
+        );
         confirmedControls.removeWhere((mac, blocked) {
           final completed = _confirmedAt[mac];
-          if (observed != null && completed != null && !observed.isBefore(completed)) {
+          if (observed != null &&
+              completed != null &&
+              !observed.isBefore(completed)) {
             _confirmedAt.remove(mac);
             return true;
           }
           return false;
         });
+        _removedAt.removeWhere(
+          (mac, completed) => observed != null && !observed.isBefore(completed),
+        );
       }
       devices = fetched;
       lastError = null;
     } catch (error) {
-      if (_disposed || requestedUrl != RouterApiService.baseUrl ||
+      if (_disposed ||
+          requestedUrl != RouterApiService.baseUrl ||
           requestedSession != RouterApiService.sessionGeneration) {
         return;
       }
@@ -209,7 +294,9 @@ class RouterDeviceProvider extends ChangeNotifier {
   }
 
   Future<void> _control(String mac, bool blocked) async {
-    if (pendingControlMac != null) throw Exception('A network command is already pending.');
+    if (pendingControlMac != null) {
+      throw Exception('A network command is already pending.');
+    }
     pendingControlMac = mac;
     final version = RouterApiService.sessionGeneration;
     notifyListeners();
@@ -218,11 +305,18 @@ class RouterDeviceProvider extends ChangeNotifier {
           ? await RouterApiService.block(mac)
           : await RouterApiService.unblock(mac);
       if (version != RouterApiService.sessionGeneration) {
-        throw Exception('Session changed; reconcile command status before retrying.');
+        throw Exception(
+          'Session changed; reconcile command status before retrying.',
+        );
       }
       if (RouterApiService.cloudMode) {
-        recordConfirmedControl(mac, blocked,
-            completedAt: DateTime.tryParse(result['completed_at'] as String? ?? ''));
+        recordConfirmedControl(
+          mac,
+          blocked,
+          completedAt: DateTime.tryParse(
+            result['completed_at'] as String? ?? '',
+          ),
+        );
       }
       _lastCloudFetch = null;
       await _fetch();
@@ -237,19 +331,57 @@ class RouterDeviceProvider extends ChangeNotifier {
     required String mac,
     required String ipAddress,
   }) async {
-    await RouterApiService.registerDevice(
-      name: name,
-      mac: mac,
-      ipAddress: ipAddress,
-    );
-    await _fetch();
+    if (pendingControlMac != null) {
+      throw Exception('A device command is already pending.');
+    }
+    pendingControlMac = mac;
+    final version = RouterApiService.sessionGeneration;
+    notifyListeners();
+    try {
+      await RouterApiService.registerDevice(
+        name: name,
+        mac: mac,
+        ipAddress: ipAddress,
+      );
+      if (version != RouterApiService.sessionGeneration) {
+        throw Exception('Home changed. Check command status.');
+      }
+      _lastCloudFetch = null;
+      await _fetch();
+    } finally {
+      pendingControlMac = null;
+      if (!_disposed) notifyListeners();
+    }
   }
 
   Future<void> deleteDevice(String mac) async {
-    await RouterApiService.deleteDevice(mac);
-    devices = devices.where((device) => device['mac'] != mac).toList();
-    _lastStatusByMac.remove(mac);
+    if (pendingControlMac != null) {
+      throw Exception('A device command is already pending.');
+    }
+    pendingControlMac = mac;
+    final version = RouterApiService.sessionGeneration;
     notifyListeners();
+    try {
+      final result = await RouterApiService.deleteDevice(mac);
+      if (version != RouterApiService.sessionGeneration) {
+        throw Exception('Home changed. Check command status.');
+      }
+      if (RouterApiService.cloudMode) {
+        recordConfirmedRemoval(
+          mac,
+          completedAt: DateTime.tryParse(
+            result['completed_at'] as String? ?? '',
+          ),
+        );
+      }
+      confirmedControls.remove(mac);
+      _confirmedAt.remove(mac);
+      devices = devices.where((device) => device['mac'] != mac).toList();
+      _lastStatusByMac.remove(mac);
+    } finally {
+      pendingControlMac = null;
+      if (!_disposed) notifyListeners();
+    }
   }
 
   @override

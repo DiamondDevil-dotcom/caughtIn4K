@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Literal
+from ipaddress import IPv4Address
+import os
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -15,8 +17,21 @@ from cloud_gateways import secret_hash
 class CommandInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command_id: UUID
-    action: Literal["block", "unblock"]
+    action: Literal["block", "unblock", "register", "remove"]
     mac: str = Field(pattern=r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+    device_name: str | None = Field(default=None, min_length=1, max_length=200)
+    ip_address: str | None = Field(default=None, max_length=15)
+
+    @model_validator(mode="after")
+    def device_details(self):
+        if self.action == "register":
+            if not self.device_name or self.device_name != self.device_name.strip() or self.ip_address is None:
+                raise ValueError("Registration requires a device name and optional IPv4 address.")
+            if self.ip_address:
+                IPv4Address(self.ip_address)
+        elif self.device_name is not None or self.ip_address is not None:
+            raise ValueError("Device details are only accepted for registration.")
+        return self
 
 
 class CommandResult(BaseModel):
@@ -71,6 +86,8 @@ def _machine_gateway(connection, gateway_id: UUID, credential: str):
 
 
 def create_command(account_id: UUID, home: UUID, gateway_id: UUID, payload: CommandInput) -> dict:
+    if payload.action in {"register", "remove"} and os.getenv("GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=503, detail="Remote device management is awaiting the Pi update.")
     with connect() as connection:
         _user_gateway(connection, account_id, home, gateway_id, manage=True)
         _expire(connection, gateway_id)
@@ -81,6 +98,7 @@ def create_command(account_id: UUID, home: UUID, gateway_id: UUID, payload: Comm
             if (
                 existing["gateway_id"] != gateway_id or existing["created_by"] != account_id
                 or existing["action"] != payload.action or existing["mac"] != payload.mac
+                or existing.get("device_name") != payload.device_name or existing.get("ip_address") != payload.ip_address
             ):
                 raise HTTPException(status_code=409, detail="Command ID is already in use.")
             return existing
@@ -96,12 +114,12 @@ def create_command(account_id: UUID, home: UUID, gateway_id: UUID, payload: Comm
             "WHERE gateway_id = %s AND devices @> %s::jsonb",
             (gateway_id, '[{"mac":"' + payload.mac + '"}]'),
         ).fetchone()
-        if device is None:
+        if payload.action != "register" and device is None:
             raise HTTPException(status_code=404, detail="Device not found in this gateway snapshot.")
         inserted = connection.execute(
-            "INSERT INTO caughtin4k.gateway_commands (id, gateway_id, created_by, action, mac) "
-            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING RETURNING *",
-            (payload.command_id, gateway_id, account_id, payload.action, payload.mac),
+            "INSERT INTO caughtin4k.gateway_commands (id, gateway_id, created_by, action, mac, device_name, ip_address) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING RETURNING *",
+            (payload.command_id, gateway_id, account_id, payload.action, payload.mac, payload.device_name, payload.ip_address),
         ).fetchone()
         if inserted is None:
             raise HTTPException(status_code=409, detail="Command ID is already in use.")
@@ -160,6 +178,7 @@ def take_command(gateway_id: UUID, credential: str) -> dict:
         return {"command": {
             "command_id": str(row["id"]), "action": row["action"], "mac": row["mac"],
             "expires_at": row["expires_at"],
+            **({"device_name": row["device_name"], "ip_address": row["ip_address"]} if row["action"] == "register" else {}),
         }}
 
 

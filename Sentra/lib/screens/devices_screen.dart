@@ -11,35 +11,47 @@ class DevicesScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final router = context.watch<RouterDeviceProvider>();
+    final canManage =
+        !RouterApiService.cloudMode ||
+        const {
+          'owner',
+          'admin',
+        }.contains(context.watch<AuthProvider>().householdRole);
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: const Text("Devices"),
         actions: [
-          if (!RouterApiService.cloudMode) IconButton(
-            tooltip: 'Add device',
-            icon: const Icon(Icons.add_circle_outline),
-            onPressed: () => _showAddDeviceDialog(context),
-          ),
+          if (canManage)
+            IconButton(
+              tooltip: 'Add device',
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed:
+                  router.pendingControlMac != null ||
+                      CloudApiService.commandUnconfirmed
+                  ? null
+                  : () => _showAddDeviceDialog(context),
+            ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
-        children: [
-          ..._routerDevicesSection(context),
-        ],
+        children: [..._routerDevicesSection(context)],
       ),
     );
   }
 
   List<Widget> _routerDevicesSection(BuildContext context) {
     final router = context.watch<RouterDeviceProvider>();
-    final foldDevices = router.devices.where((device) {
+    final foldDevices = router.displayedDevices.where((device) {
       final mac = (device['mac'] as String? ?? '').toLowerCase();
       return !mac.startsWith('02:00:00:00:01:');
     }).toList();
 
-    if (foldDevices.isEmpty && router.lastError == null && !RouterApiService.cloudMode) {
+    if (foldDevices.isEmpty &&
+        router.lastError == null &&
+        !RouterApiService.cloudMode) {
       return const [];
     }
 
@@ -47,39 +59,46 @@ class DevicesScreen extends StatelessWidget {
       Padding(
         padding: EdgeInsets.only(bottom: 12),
         child: Text(
-          RouterApiService.cloudMode ? 'Household devices (cloud snapshot)' : 'Live Network Devices (Router)',
+          RouterApiService.cloudMode
+              ? 'Your devices'
+              : 'Live Network Devices (Router)',
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
         ),
       ),
       if (RouterApiService.cloudMode) ...[
-          Text(router.cloudFreshness),
-          if (CloudApiService.lastCommandId != null) ...[
-            SelectableText('Last command: ${CloudApiService.lastCommandId}'),
-            TextButton(
-              onPressed: router.pendingControlMac != null ? null : () async {
-                try {
-                  final result = await CloudApiService.commandStatus();
-                  if (!context.mounted) return;
-                  if (result['status'] == 'succeeded' && CloudApiService.lastCommandMac != null) {
-                    context.read<RouterDeviceProvider>().recordConfirmedControl(
-                      CloudApiService.lastCommandMac!, CloudApiService.lastCommandAction == 'block',
-                      completedAt: DateTime.tryParse(result['completed_at'] as String? ?? ''),
-                    );
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text('Command: ${result['status']}. '
-                        'Only succeeded means Pi-confirmed enforcement. Unknown requires checking Pi/device state.'),
-                  ));
-                  context.read<RouterDeviceProvider>().refresh();
-                } catch (error) {
-                  if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$error')));
-                }
-              },
-              child: const Text('Check command status'),
-            ),
-          ],
-          if (foldDevices.isEmpty) const Text('No devices in this gateway snapshot yet.'),
-          const SizedBox(height: 12),
+        Text(router.cloudFreshness),
+        if (CloudApiService.commandUnconfirmed) ...[
+          TextButton(
+            onPressed: router.pendingControlMac != null
+                ? null
+                : () async {
+                    try {
+                      final result = await context
+                          .read<RouterDeviceProvider>()
+                          .checkCommandStatus();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            result['status'] == 'succeeded'
+                                ? 'Your Pi confirmed the device action.'
+                                : 'Device action: ${result['status']}. Check before retrying.',
+                          ),
+                        ),
+                      );
+                    } catch (error) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text('$error')));
+                      }
+                    }
+                  },
+            child: const Text('Check command status'),
+          ),
+        ],
+        if (foldDevices.isEmpty)
+          const Text('No devices reported yet. Add a device to your home.'),
+        const SizedBox(height: 12),
       ],
       if (router.lastError != null)
         Padding(
@@ -99,30 +118,113 @@ class DevicesScreen extends StatelessWidget {
     final mac = TextEditingController();
     final ip = TextEditingController();
     final formKey = GlobalKey<FormState>();
+    bool busy = false;
+    String? error;
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Add device'),
-        content: SingleChildScrollView(
-          child: Form(
-            key: formKey,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Device name'), validator: (value) => value == null || value.trim().isEmpty ? 'Enter a name' : null),
-            TextFormField(controller: mac, decoration: const InputDecoration(labelText: 'MAC address', hintText: 'aa:bb:cc:dd:ee:ff'), validator: (value) => value == null || !RegExp(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$').hasMatch(value.trim()) ? 'Enter a valid MAC address' : null),
-            TextFormField(controller: ip, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'IP address (optional)', hintText: 'Auto-resolved if omitted')),
-          ])),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              if (!formKey.currentState!.validate()) return;
-              await context.read<RouterDeviceProvider>().registerDevice(name: name.text.trim(), mac: mac.text.trim().toLowerCase(), ipAddress: ip.text.trim());
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-            },
-            child: const Text('Add device'),
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => PopScope(
+          canPop: !busy,
+          child: AlertDialog(
+            title: const Text('Add device'),
+            content: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: name,
+                      decoration: const InputDecoration(
+                        labelText: 'Device name',
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? 'Enter a name'
+                          : null,
+                    ),
+                    TextFormField(
+                      controller: mac,
+                      decoration: const InputDecoration(
+                        labelText: 'MAC address',
+                        hintText: 'aa:bb:cc:dd:ee:ff',
+                      ),
+                      validator: (value) =>
+                          value == null ||
+                              !RegExp(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
+                                  .hasMatch(value.trim())
+                          ? 'Enter a valid MAC address'
+                          : null,
+                    ),
+                    TextFormField(
+                      controller: ip,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'IP address (optional)',
+                        hintText: 'Auto-resolved if omitted',
+                      ),
+                    ),
+                    if (error != null)
+                      Text(
+                        error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: busy ? null : () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: busy || CloudApiService.commandUnconfirmed
+                    ? null
+                    : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        setDialogState(() {
+                          busy = true;
+                          error = null;
+                        });
+                        try {
+                          await context
+                              .read<RouterDeviceProvider>()
+                              .registerDevice(
+                                name: name.text.trim(),
+                                mac: mac.text.trim().toLowerCase(),
+                                ipAddress: ip.text.trim(),
+                              );
+                          if (dialogContext.mounted) {
+                            Navigator.pop(dialogContext);
+                            if (RouterApiService.cloudMode) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Device added on your Pi. It may take up to 30 seconds to appear.',
+                                  ),
+                                ),
+                              );
+                            }
+                          }
+                        } catch (failure) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() => error = '$failure');
+                          }
+                        } finally {
+                          if (dialogContext.mounted) {
+                            setDialogState(() => busy = false);
+                          }
+                        }
+                      },
+                child: Text(busy ? 'Waiting for Pi...' : 'Add device'),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
     name.dispose();
@@ -135,13 +237,20 @@ class DevicesScreen extends StatelessWidget {
     final mac = device['mac'] as String? ?? '';
     final router = context.watch<RouterDeviceProvider>();
     final cloud = RouterApiService.cloudMode;
-    final blocked = router.confirmedControls[mac] ?? (device['blocked'] == true || status == 'BLOCKED');
-    final canControl = !cloud || (!router.cloudDataStale && !CloudApiService.commandUnconfirmed &&
-        const {'owner', 'admin'}.contains(context.watch<AuthProvider>().householdRole));
+    final blocked = device['blocked'] == true || status == 'BLOCKED';
+    final canControl =
+        !cloud ||
+        (!router.cloudDataStale &&
+            !CloudApiService.commandUnconfirmed &&
+            const {
+              'owner',
+              'admin',
+            }.contains(context.watch<AuthProvider>().householdRole));
     final colors = {
       'SAFE': Colors.green,
       'WARNING': Colors.orange,
       'ALERT': Colors.red,
+      'ATTACK': Colors.red,
       'BLOCKED': Colors.grey,
     };
     final color = colors[status] ?? Colors.blueGrey;
@@ -167,62 +276,93 @@ class DevicesScreen extends StatelessWidget {
             ),
             const Divider(),
             if (router.confirmedControls.containsKey(mac))
-              const Text('Pi confirmed the command; waiting for the next snapshot.'),
-            if (cloud && !const {'owner', 'admin'}.contains(context.watch<AuthProvider>().householdRole))
+              const Text('Device action confirmed. Updating…'),
+            if (cloud &&
+                !const {
+                  'owner',
+                  'admin',
+                }.contains(context.watch<AuthProvider>().householdRole))
               const Text('Read-only: owners/admins can control the network.'),
             Row(
               children: [
-                if (!cloud) Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _confirmDelete(context, device),
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Remove'),
+                if (!cloud ||
+                    const {
+                      'owner',
+                      'admin',
+                    }.contains(context.watch<AuthProvider>().householdRole))
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: !canControl || router.pendingControlMac != null
+                          ? null
+                          : () => _confirmDelete(context, device),
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('Remove'),
+                    ),
                   ),
-                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: !canControl || router.pendingControlMac != null ? null : () async {
-                      final confirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (dialogContext) => AlertDialog(
-                          title: Text(blocked ? 'Unblock device?' : 'Block device?'),
-                          content: Text('${device['name'] ?? mac}\n$mac\n'
-                              'Only control devices on your Pi network. Blocking this phone can disconnect the app; keep another connection available to restore it.'),
-                          actions: [
-                            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-                            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(blocked ? 'Unblock' : 'Block')),
-                          ],
-                        ),
-                      );
-                      if (confirmed != true || !context.mounted) return;
-                      final router = context.read<RouterDeviceProvider>();
-                      final operation = blocked
-                          ? router.unblock(mac)
-                          : router.block(mac);
-                      operation.then((_) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              blocked
-                                  ? 'Device unblocked.'
-                                  : 'Pi confirmed blocking. Use a separate connection to restore this phone.',
-                            ),
-                          ),
-                        );
-                      }).catchError((Object error) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Device action failed: $error')),
-                        );
-                      });
-                    },
-                    icon: Icon(
-                      blocked ? Icons.lock_open : Icons.block,
-                    ),
+                    onPressed: !canControl || router.pendingControlMac != null
+                        ? null
+                        : () async {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (dialogContext) => AlertDialog(
+                                title: Text(
+                                  blocked ? 'Unblock device?' : 'Block device?',
+                                ),
+                                content: Text(
+                                  '${device['name'] ?? mac}\n$mac\n'
+                                  'Only control devices on your Pi network. Blocking this phone can disconnect the app; keep another connection available to restore it.',
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(dialogContext, false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: () =>
+                                        Navigator.pop(dialogContext, true),
+                                    child: Text(blocked ? 'Unblock' : 'Block'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed != true || !context.mounted) return;
+                            final router = context.read<RouterDeviceProvider>();
+                            final operation = blocked
+                                ? router.unblock(mac)
+                                : router.block(mac);
+                            operation
+                                .then((_) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        blocked ? 'Device unblocked.' : 'Pi confirmed blocking. Use a separate connection to restore this phone.',
+                                      ),
+                                    ),
+                                  );
+                                })
+                                .catchError((Object error) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Device action failed: $error',
+                                      ),
+                                    ),
+                                  );
+                                });
+                          },
+                    icon: Icon(blocked ? Icons.lock_open : Icons.block),
                     label: Text(
-                      router.pendingControlMac == mac ? 'Waiting for Pi...' : blocked ? 'Unblock' : 'Block',
+                      router.pendingControlMac == mac
+                          ? 'Waiting for Pi...'
+                          : blocked
+                          ? 'Unblock'
+                          : 'Block',
                     ),
                   ),
                 ),
@@ -234,7 +374,10 @@ class DevicesScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, Map<String, dynamic> device) async {
+  Future<void> _confirmDelete(
+    BuildContext context,
+    Map<String, dynamic> device,
+  ) async {
     final mac = device['mac'] as String? ?? '';
     final name = device['name'] as String? ?? mac;
     final confirmed = await showDialog<bool>(
@@ -243,14 +386,27 @@ class DevicesScreen extends StatelessWidget {
         title: const Text('Remove device?'),
         content: Text('$name and its detection history will be removed.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
     if (confirmed == true && context.mounted) {
-      await context.read<RouterDeviceProvider>().deleteDevice(mac);
+      try {
+        await context.read<RouterDeviceProvider>().deleteDevice(mac);
+      } catch (failure) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not remove device: $failure')),
+          );
+        }
+      }
     }
   }
-
 }

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from ipaddress import IPv4Address
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -20,18 +21,29 @@ logger = logging.getLogger(__name__)
 
 
 def validate_command(command: object) -> dict:
-    if not isinstance(command, dict) or set(command) != {"command_id", "action", "mac", "expires_at"}:
+    if not isinstance(command, dict):
+        raise PermanentUploadError("Cloud command contract is invalid.")
+    required = {"command_id", "action", "mac", "expires_at"}
+    if command.get("action") == "register":
+        required |= {"device_name", "ip_address"}
+    if set(command) != required:
         raise PermanentUploadError("Cloud command contract is invalid.")
     try:
         UUID(command["command_id"])
         deadline = datetime.fromisoformat(command["expires_at"])
         if (
-            command["action"] not in {"block", "unblock"}
+            command["action"] not in {"block", "unblock", "register", "remove"}
             or not isinstance(command["mac"], str)
             or re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}", command["mac"]) is None
             or deadline.tzinfo is None
         ):
             raise ValueError
+        if command["action"] == "register":
+            name, ip = command["device_name"], command["ip_address"]
+            if not isinstance(name, str) or not 1 <= len(name) <= 200 or name != name.strip() or not isinstance(ip, str):
+                raise ValueError
+            if ip:
+                IPv4Address(ip)
     except (ValueError, TypeError, AttributeError):
         raise PermanentUploadError("Cloud command contract is invalid.") from None
     return command

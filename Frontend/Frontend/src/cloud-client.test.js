@@ -187,3 +187,67 @@ test("a response decoded after sign-out cannot restore private data", async () =
   release(snapshot());
   await assert.rejects(pending, /Account or home changed/);
 });
+
+test("owners can register a new MAC with bounded details and wait for actual acknowledgement", async () => {
+  let saved;
+  const newMac = "11:22:33:44:55:66";
+  const cloud = client(async (url, request) => {
+    if (url.endsWith("/snapshot")) return response({ ...snapshot(), device_management_available: true });
+    if (request.method === "POST") {
+      saved = JSON.parse(request.body);
+      return response({ ...saved, id: saved.command_id, gateway_id: home.gateway_id }, 202);
+    }
+    return response({ ...saved, id: saved.command_id, gateway_id: home.gateway_id,
+      status: "succeeded", result_code: "applied", completed_at: new Date().toISOString() });
+  });
+  await cloud.submit(newMac, "register", { device_name: " Sensor ", ip_address: "" });
+  assert.equal(saved.device_name, "Sensor");
+  assert.equal(saved.ip_address, "");
+  assert.equal(saved.mac, newMac);
+  assert.equal(cloud.pending.unconfirmed, true);
+  assert.equal((await cloud.commandStatus()).status, "succeeded");
+  assert.equal(cloud.confirmed.size, 0);
+  assert.equal(cloud.pending.unconfirmed, false);
+});
+
+test("removed devices stay hidden during old snapshots including recovered commands", async () => {
+  const old = snapshot();
+  const completed = new Date(Date.parse(old.observed_at) + 1000).toISOString();
+  let saved;
+  const store = storage();
+  const fetcher = async (url, request) => {
+    if (url.endsWith("/snapshot")) return response({ ...structuredClone(old), device_management_available: true });
+    if (request.method === "POST") {
+      saved = JSON.parse(request.body);
+      return response({ ...saved, id: saved.command_id, gateway_id: home.gateway_id }, 202);
+    }
+    return response({ ...saved, id: saved.command_id, gateway_id: home.gateway_id,
+      status: "succeeded", result_code: "applied", completed_at: completed });
+  };
+  const original = client(fetcher, store);
+  await original.submit(mac, "remove");
+  const recovered = new CloudClient(original.origin, { fetcher, storage: store });
+  recovered.select(home);
+  await recovered.commandStatus();
+  assert.equal((await recovered.snapshot()).devices.length, 0);
+  assert.equal(recovered.confirmed.size, 0);
+  old.devices = [];
+  old.observed_at = new Date(Date.parse(completed) + 1000).toISOString();
+  assert.equal((await recovered.snapshot()).devices.length, 0);
+  assert.equal(recovered.removed.size, 0);
+});
+
+test("management rollout gate and household membership prevent device mutations", async () => {
+  for (const action of ["register", "remove"]) {
+    let posts = 0;
+    const cloud = client(async (url, request) => {
+      if (request.method === "POST") posts++;
+      return response(snapshot());
+    });
+    await assert.rejects(cloud.submit(mac, action, { device_name: "Sensor", ip_address: "" }), /Pi update/);
+    assert.equal(posts, 0);
+    cloud.select({ ...home, role: "member" });
+    await assert.rejects(cloud.submit(mac, action), /owners\/admins/);
+    assert.equal(posts, 0);
+  }
+});

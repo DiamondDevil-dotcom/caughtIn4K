@@ -351,6 +351,8 @@ class CloudApiService {
     String action, {
     Duration pollInterval = const Duration(seconds: 3),
     Duration wait = const Duration(seconds: 150),
+    String? deviceName,
+    String? ipAddress,
   }) async {
     if (commandUnconfirmed) {
       throw Exception(
@@ -362,11 +364,17 @@ class CloudApiService {
         'Only household owners and admins can control the network.',
       );
     }
-    if (!{'block', 'unblock'}.contains(action) ||
+    if (!{'block', 'unblock', 'register', 'remove'}.contains(action) ||
         !RegExp(r'^[0-9a-f]{2}(:[0-9a-f]{2}){5}$').hasMatch(mac)) {
       throw const FormatException('Invalid network control target.');
     }
     final fresh = await snapshot();
+    if ({'register', 'remove'}.contains(action) &&
+        fresh['device_management_available'] != true) {
+      throw Exception(
+        'Device management requires the Pi update. No command sent.',
+      );
+    }
     final observed = DateTime.tryParse(fresh['observed_at'] as String? ?? '');
     if (fresh['data_stale'] == true ||
         fresh['recent_contact'] != true ||
@@ -392,7 +400,13 @@ class CloudApiService {
           'POST',
           path,
           expected: 202,
-          body: {'command_id': id, 'action': action, 'mac': mac},
+          body: {
+            'command_id': id,
+            'action': action,
+            'mac': mac,
+            if (action == 'register') 'device_name': deviceName,
+            if (action == 'register') 'ip_address': ipAddress ?? '',
+          },
         );
       } on CloudRequestException catch (error) {
         if ({400, 401, 403, 404, 409, 422}.contains(error.status) &&

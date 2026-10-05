@@ -78,6 +78,27 @@ class ControlAgentTests(unittest.TestCase):
             agent.ControlWorker(self.config, MagicMock()).poll()
         self.assertEqual(request.call_count, 1)
 
+    def test_device_management_is_bounded_and_acknowledged_without_replay(self):
+        for action in ("register", "remove"):
+            command = {**self.command, "action": action}
+            if action == "register":
+                command.update(device_name="Sensor", ip_address="")
+            self.assertEqual(agent.validate_command(command), command)
+            worker = agent.ControlWorker(self.config, MagicMock())
+            with patch.object(agent, "endpoint_json", side_effect=[
+                {"command": command}, self.result, UploadError("offline"), {"success": True},
+            ]) as request:
+                with self.assertRaises(UploadError):
+                    worker.poll()
+                worker.poll()
+            self.assertEqual([call.args[1].method for call in request.call_args_list], ["POST", "POST", "PUT", "PUT"])
+            self.assertEqual(json.loads(request.call_args_list[1].args[1].data), command)
+        for extra in (
+            {"device_name": " "}, {"ip_address": "host;reboot"}, {"device_name": "a" * 201},
+        ):
+            with self.assertRaises(PermanentUploadError):
+                agent.validate_command({**self.command, "action": "register", "device_name": "Sensor", "ip_address": "", **extra})
+
 
 if __name__ == "__main__":
     unittest.main()

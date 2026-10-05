@@ -200,6 +200,36 @@ class CloudIntegrationTests(unittest.TestCase):
             self.assertEqual(commands.read_command(
                 account_ids[0], home_a, gateway_ids[0], expiring.command_id,
             )["status"], "expired")
+            with patch.dict(os.environ, {"GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED": "true"}):
+                for action in ("register", "remove"):
+                    management = commands.CommandInput(
+                        command_id=uuid4(), action=action,
+                        mac="11:22:33:44:55:66" if action == "register" else payload.mac,
+                        **({"device_name": "Integration sensor", "ip_address": ""}
+                           if action == "register" else {}),
+                    )
+                    created = commands.create_command(account_ids[0], home_a, gateway_ids[0], management)
+                    self.assertEqual(created["action"], action)
+                    if action == "register":
+                        self.assertEqual(created["device_name"], management.device_name)
+                        self.assertEqual(created["ip_address"], "")
+                    self.assertEqual(commands.create_command(
+                        account_ids[0], home_a, gateway_ids[0], management,
+                    )["id"], management.command_id)
+                    delivered = commands.take_command(gateway_ids[0], first["gateway_credential"])["command"]
+                    self.assertEqual(delivered["action"], action)
+                    if action == "register":
+                        self.assertEqual(delivered["device_name"], management.device_name)
+                        self.assertEqual(delivered["ip_address"], "")
+                    else:
+                        self.assertNotIn("device_name", delivered)
+                    self.assertEqual(commands.complete_command(
+                        gateway_ids[0], first["gateway_credential"], management.command_id,
+                        commands.CommandResult(success=True, result_code="applied"),
+                    )["status"], "succeeded")
+                    self.assertIsNone(commands.take_command(
+                        gateway_ids[0], first["gateway_credential"],
+                    )["command"])
             token_secret = secrets.token_urlsafe(32)
             token = accounts.issue_token(account, token_secret)
             self.assertEqual(accounts.authenticate("Bearer " + token, token_secret)["id"], account["id"])

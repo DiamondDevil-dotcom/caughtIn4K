@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nyxis_security/services/cloud_api_service.dart';
 import 'package:nyxis_security/services/router_api_service.dart';
+import 'package:nyxis_security/providers/router_device_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -204,6 +205,122 @@ void main() {
   });
 
   test(
+    'register and remove are bounded commands, not direct router requests',
+    () async {
+      for (final action in ['register', 'remove']) {
+        select();
+        Map<String, dynamic>? command;
+        var reads = 0;
+        await http.runWithClient(
+          () async {
+            final result = await CloudApiService.control(
+              action == 'register' ? '11:22:33:44:55:66' : mac,
+              action,
+              deviceName: action == 'register' ? 'Sensor' : null,
+              ipAddress: action == 'register' ? '' : null,
+              pollInterval: Duration.zero,
+            );
+            expect(result['success'], isTrue);
+            expect(reads, 2);
+            expect(CloudApiService.commandUnconfirmed, isFalse);
+          },
+          () => MockClient((request) async {
+            if (request.url.path.endsWith('/snapshot')) {
+              return http.Response(
+                jsonEncode({
+                  ...snapshot(),
+                  'device_management_available': true,
+                }),
+                200,
+              );
+            }
+            expect(
+              request.url.path,
+              contains('/cloud/households/home-a/gateways/gateway-a/commands'),
+            );
+            if (request.method == 'POST') {
+              command = jsonDecode(request.body) as Map<String, dynamic>;
+              expect(command!['action'], action);
+              if (action == 'register') {
+                expect(command!['device_name'], 'Sensor');
+                expect(command!['ip_address'], '');
+              } else {
+                expect(command!.containsKey('device_name'), isFalse);
+              }
+              return http.Response(
+                jsonEncode({
+                  ...command!,
+                  'id': command!['command_id'],
+                  'gateway_id': 'gateway-a',
+                }),
+                202,
+              );
+            }
+            reads++;
+            return http.Response(
+              jsonEncode({
+                ...command!,
+                'id': command!['command_id'],
+                'gateway_id': 'gateway-a',
+                'status': reads == 1 ? 'delivered' : 'succeeded',
+                'result_code': reads == 2 ? 'applied' : null,
+                'completed_at': DateTime.now().toUtc().toIso8601String(),
+              }),
+              200,
+            );
+          }),
+        );
+      }
+    },
+  );
+
+  test(
+    'recovering a succeeded remove never restores the old device snapshot',
+    () async {
+      select();
+      CloudApiService.lastCommandId = 'command-test';
+      CloudApiService.lastCommandMac = mac;
+      CloudApiService.lastCommandAction = 'remove';
+      CloudApiService.commandUnconfirmed = true;
+      final old = snapshot();
+      final completed = DateTime.parse(old['observed_at'] as String)
+          .add(const Duration(seconds: 1));
+      final router = RouterDeviceProvider();
+      try {
+        await http.runWithClient(
+          () async {
+            final result = await router.checkCommandStatus();
+            expect(result['status'], 'succeeded');
+            expect(router.devices.length, 1);
+            expect(router.displayedDevices, isEmpty);
+            expect(router.confirmedControls, isEmpty);
+            expect(CloudApiService.commandUnconfirmed, isFalse);
+          },
+          () => MockClient((request) async {
+            expect(request.method, 'GET');
+            return http.Response(
+              jsonEncode(
+                request.url.path.endsWith('/snapshot')
+                    ? old
+                    : {
+                        'id': 'command-test',
+                        'gateway_id': 'gateway-a',
+                        'status': 'succeeded',
+                        'result_code': 'applied',
+                        'completed_at': completed.toIso8601String(),
+                      },
+              ),
+              200,
+            );
+          }),
+        );
+      } finally {
+        router.dispose();
+      }
+    },
+  );
+
+  test(
     'member controls, stale data and unsupported features never send a command',
     () async {
       select(role: 'member');
@@ -234,7 +351,7 @@ void main() {
             ),
             throwsException,
           );
-          expect(requests, isEmpty);
+          expect(requests.every((r) => r.method == 'GET'), isTrue);
         },
         () => MockClient((request) async {
           requests.add(request);

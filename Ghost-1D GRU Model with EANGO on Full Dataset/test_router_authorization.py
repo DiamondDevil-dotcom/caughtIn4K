@@ -220,6 +220,57 @@ class PiAuthorizationTests(unittest.TestCase):
         self.assertEqual(state.status, "BLOCKED")
         store.assert_not_called()
 
+    def test_cloud_device_registration_and_removal_reuse_local_operations(self):
+        client = TestClient(router.app, client=("127.0.0.1", 50000))
+        headers = {"X-Gateway-Token": "private-gateway-test-token"}
+        base = {"command_id": str(uuid4()), "mac": "aa:bb:cc:dd:ee:ff",
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat()}
+        with (
+            patch.dict(os.environ, {"GHOST_CLOUD_CONTROL_ENABLED": "true",
+                "GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED": "true"}),
+            patch.object(router, "apply_device_registration") as register,
+            patch.object(router, "apply_device_removal", return_value={"success": True}) as remove,
+        ):
+            payload = {**base, "action": "register", "device_name": "Sensor", "ip_address": ""}
+            self.assertEqual(client.post("/cloud-agent/control", headers=headers, json=payload).json(),
+                {"success": True, "result_code": "applied"})
+            self.assertEqual(register.call_args.args[0].name, "Sensor")
+            self.assertEqual(client.post("/cloud-agent/control", headers=headers,
+                json={**payload, "ip_address": "hostname;reboot"}).status_code, 422)
+            self.assertEqual(register.call_count, 1)
+            self.assertEqual(client.post("/cloud-agent/control", headers=headers, json={**base, "action": "remove"}).json(),
+                {"success": True, "result_code": "applied"})
+            remove.assert_called_once_with(base["mac"])
+            self.assertEqual(self.client.post("/cloud-agent/control", headers=headers, json=payload).status_code, 403)
+            with patch.dict(os.environ, {"GHOST_CLOUD_DEVICE_MANAGEMENT_ENABLED": "false"}):
+                self.assertEqual(client.post("/cloud-agent/control", headers=headers, json=payload).status_code, 404)
+                self.assertEqual(register.call_count, 1)
+
+    def test_removal_never_deletes_record_when_unblocking_fails(self):
+        with (
+            patch.object(router, "_ensure_household_device"),
+            patch.object(router, "is_excluded_device", return_value=False),
+            patch.object(router.registry, "find", return_value=SimpleNamespace(blocked=True)),
+            patch.object(router, "apply_device_control", return_value={"success": False}),
+            patch.object(router.storage, "delete_device") as delete,
+        ):
+            with self.assertRaises(router.HTTPException):
+                router.apply_device_removal("aa:bb:cc:dd:ee:ff")
+            delete.assert_not_called()
+
+    def test_removal_clears_firewall_even_without_an_in_memory_device(self):
+        with (
+            patch.object(router, "_ensure_household_device"),
+            patch.object(router, "is_excluded_device", return_value=False),
+            patch.object(router.registry, "find", return_value=None),
+            patch.object(router.network_control, "unblock_mac", return_value=(True, "removed")) as unblock,
+            patch.object(router.registry, "remove"),
+            patch.object(router.storage, "delete_device") as delete,
+        ):
+            self.assertTrue(router.apply_device_removal("aa:bb:cc:dd:ee:ff")["success"])
+            unblock.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+            delete.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
     def test_member_cannot_register_devices_or_start_training(self):
         ok, error, invite = router.storage.create_invite(
             "owner@example.com", "member@example.com", "member"

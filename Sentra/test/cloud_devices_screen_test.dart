@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:nyxis_security/providers/alert_provider.dart';
 import 'package:nyxis_security/providers/auth_provider.dart';
 import 'package:nyxis_security/providers/router_device_provider.dart';
 import 'package:nyxis_security/screens/devices_screen.dart';
+import 'package:nyxis_security/screens/home_screen.dart';
 import 'package:nyxis_security/services/cloud_api_service.dart';
 
 void main() {
   late RouterDeviceProvider router;
 
   setUp(() {
+    GoogleFonts.config.allowRuntimeFetching = false;
     CloudApiService.configure(
       'https://staging.example',
       'test-private-staging-token-32-characters',
@@ -36,7 +40,11 @@ void main() {
     CloudApiService.disable();
   });
 
-  Future<void> mount(WidgetTester tester, String role) async {
+  Future<void> mount(
+    WidgetTester tester,
+    String role, {
+    Widget screen = const DevicesScreen(),
+  }) async {
     CloudApiService.select({
       'household_id': 'home',
       'gateway_id': 'gateway',
@@ -52,8 +60,9 @@ void main() {
         providers: [
           ChangeNotifierProvider.value(value: router),
           ChangeNotifierProvider(create: (_) => AuthProvider()),
+          ChangeNotifierProvider(create: (_) => AlertProvider()),
         ],
-        child: const MaterialApp(home: DevicesScreen()),
+        child: MaterialApp(home: screen),
       ),
     );
   }
@@ -80,6 +89,8 @@ void main() {
       await mount(tester, 'owner');
       final button = find.widgetWithText(FilledButton, 'Block');
       expect(tester.widget<FilledButton>(button).onPressed, isNotNull);
+      expect(find.byTooltip('Add device'), findsOneWidget);
+      expect(find.text('Remove'), findsOneWidget);
       await tester.tap(button);
       await tester.pumpAndSettle();
       expect(find.text('Block device?'), findsOneWidget);
@@ -96,12 +107,63 @@ void main() {
             .onPressed,
         isNull,
       );
+
       router.pendingControlMac = null;
       CloudApiService.lastSnapshot!['data_stale'] = true;
       router.notifyListeners();
       await tester.pump();
       expect(tester.widget<FilledButton>(button).onPressed, isNull);
-      expect(find.textContaining('stale/offline'), findsOneWidget);
+      expect(
+        find.textContaining('offline or updates are delayed'),
+        findsOneWidget,
+      );
+    },
+  );
+  testWidgets(
+    'confirmed unblock has consistent badge and button despite an older blocked snapshot',
+    (tester) async {
+      router.devices.single['status'] = 'BLOCKED';
+      router.devices.single['blocked'] = true;
+      router.recordConfirmedControl('aa:bb:cc:dd:ee:ff', false);
+      await mount(tester, 'owner');
+      expect(find.text('BLOCKED'), findsNothing);
+      expect(find.text('SAFE'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Block'), findsOneWidget);
+      router.recordConfirmedControl('aa:bb:cc:dd:ee:ff', true);
+      await tester.pump();
+      expect(find.text('BLOCKED'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Unblock'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'home uses effective device state without a fake Protected claim',
+    (tester) async {
+      router.recordConfirmedControl('aa:bb:cc:dd:ee:ff', true);
+      await mount(tester, 'owner', screen: const HomeScreen());
+      expect(find.text('Devices are blocked'), findsOneWidget);
+      expect(find.text('1 blocked · 0 needing attention'), findsOneWidget);
+      expect(find.text('Protected'), findsNothing);
+      expect(find.textContaining('checkpoint'), findsNothing);
+      router.recordConfirmedControl('aa:bb:cc:dd:ee:ff', false);
+      await tester.pump();
+      expect(find.text('No threats reported'), findsOneWidget);
+      router.devices.clear();
+      router.notifyListeners();
+      await tester.pump();
+      expect(find.text('Add your first device'), findsOneWidget);
+      expect(find.text('No threats reported'), findsNothing);
+      router.devices = [
+        {'mac': 'aa:bb:cc:dd:ee:ff', 'status': 'UNKNOWN'},
+      ];
+      router.confirmedControls.clear();
+      router.notifyListeners();
+      await tester.pump();
+      expect(find.text('Checking your devices'), findsOneWidget);
+      CloudApiService.lastSnapshot!['data_stale'] = true;
+      router.notifyListeners();
+      await tester.pump();
+      expect(find.text('Home updates delayed'), findsOneWidget);
     },
   );
 }
