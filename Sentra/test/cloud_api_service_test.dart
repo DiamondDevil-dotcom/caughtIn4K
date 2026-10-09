@@ -57,6 +57,43 @@ void main() {
 
   tearDown(CloudApiService.disable);
 
+  test(
+    'setup QR email errors explain invalid labels and delivery failures',
+    () async {
+      for (final entry in {
+        400: 'invalid, expired, or already paired',
+        403: 'Verify your account email',
+        503: 'could not be sent',
+        429: 'Too many requests',
+      }.entries) {
+        await http.runWithClient(
+          () async => expectLater(
+            CloudApiService.request(
+              'POST',
+              '/cloud/gateways/email-setup-qr',
+              body: {'gateway_id': 'gateway', 'pairing_code': 'test'},
+            ),
+            throwsA(
+              predicate(
+                (error) =>
+                    error is CloudRequestException &&
+                    error.status == entry.key &&
+                    error.toString().contains(entry.value) &&
+                    !error.toString().contains('private database diagnostic'),
+              ),
+            ),
+          ),
+          () => MockClient(
+            (_) async => http.Response(
+              '{"detail":"private database diagnostic"}',
+              entry.key,
+            ),
+          ),
+        );
+      }
+    },
+  );
+
   test('signup validation reports the actual safe account error', () async {
     for (final message in [
       'Enter a valid email address.',

@@ -34,10 +34,13 @@ class SignupInput(LoginInput):
     name: str = Field(min_length=1, max_length=200)
 
 
-class PairGatewayInput(BaseModel):
+class SetupQrInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     gateway_id: UUID
     pairing_code: str = Field(min_length=1, max_length=256)
+
+
+class PairGatewayInput(SetupQrInput):
     household_name: str = Field(min_length=1, max_length=200)
 
 
@@ -164,6 +167,14 @@ def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
             gateways.pair_gateway, account["id"], payload.gateway_id,
             payload.pairing_code, payload.household_name,
         )
+
+    @router.post("/gateways/email-setup-qr")
+    async def email_setup_qr(payload: SetupQrInput, account=Depends(current_account)):
+        if account.get("email_verified_at") is None:
+            raise HTTPException(status_code=403, detail="Verify your email before requesting a setup QR.")
+        await operation(security.limit, "setup-qr:" + str(account["id"]), secret, 3, 900)
+        await operation(security.limit, "setup-qr-gateway:" + str(payload.gateway_id), secret, 3, 900)
+        return await operation(security.email_setup_qr, account["id"], payload.gateway_id, payload.pairing_code)
 
     @router.get("/households/{household_id}/gateways")
     async def list_gateways(household_id: UUID, account=Depends(current_account)):

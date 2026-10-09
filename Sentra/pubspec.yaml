@@ -45,6 +45,7 @@ dependencies:
   local_auth: ^3.0.2
   flutter_secure_storage: ^11.2.0
   mobile_scanner: ^7.4.2
+  image_picker: ^1.2.1
   firebase_core: ^4.15.0
   firebase_messaging: ^16.7.0
 

@@ -2,6 +2,8 @@
 
 import hashlib
 import hmac
+import io
+import json
 import logging
 import os
 import secrets
@@ -10,6 +12,7 @@ import ssl
 from email.message import EmailMessage
 from uuid import UUID
 
+import qrcode
 from fastapi import HTTPException
 
 import cloud_accounts as accounts
@@ -58,17 +61,10 @@ def mail_settings() -> tuple[str, int, str, str, str]:
     return host, port, username, password, sender
 
 
-def send_code(email: str, code: str, purpose: str) -> None:
+def _send_message(message: EmailMessage) -> None:
     try:
         host, port, username, password, sender = mail_settings()
-        message = EmailMessage()
-        message["Subject"] = f"caughtIn4K {purpose}"
         message["From"] = sender
-        message["To"] = email
-        message.set_content(
-            f"Your caughtIn4K {purpose} code is {code}.\n"
-            "It expires in 15 minutes. If you did not request it, ignore this email."
-        )
         context = ssl.create_default_context()
         if port == 465:
             smtp = smtplib.SMTP_SSL(host, port, timeout=10, context=context)
@@ -83,6 +79,56 @@ def send_code(email: str, code: str, purpose: str) -> None:
     except (ValueError, OSError, smtplib.SMTPException):
         logger.error("Cloud account email delivery failed.")
         raise HTTPException(status_code=503, detail="Account email could not be delivered. Try again later.") from None
+
+
+def send_code(email: str, code: str, purpose: str) -> None:
+    message = EmailMessage()
+    message["Subject"] = f"caughtIn4K {purpose}"
+    message["To"] = email
+    message.set_content(
+        f"Your caughtIn4K {purpose} code is {code}.\n"
+        "It expires in 15 minutes. If you did not request it, ignore this email."
+    )
+    _send_message(message)
+
+
+def email_setup_qr(account_id: UUID, gateway_id: UUID, pairing_code: str) -> dict:
+    code = pairing_code.strip()
+    if not 1 <= len(code) <= 256:
+        raise HTTPException(status_code=400, detail="Gateway setup code is invalid or unavailable.")
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT a.email, g.pairing_expires_at FROM caughtin4k.gateways g "
+            "JOIN caughtin4k.accounts a ON a.id = %s "
+            "WHERE g.id = %s AND g.pairing_code_hash = %s "
+            "AND g.pairing_expires_at > now() AND g.household_id IS NULL "
+            "AND g.revoked_at IS NULL AND a.email_verified_at IS NOT NULL",
+            (account_id, gateway_id, secret_hash(code)),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=400, detail="Gateway setup code is invalid or unavailable.")
+    payload = json.dumps({
+        "version": 1, "gateway_id": str(gateway_id), "pairing_code": code,
+    }, separators=(",", ":"))
+    image = qrcode.make(payload)
+    with io.BytesIO() as buffer:
+        image.save(buffer, format="PNG")
+        png = buffer.getvalue()
+    message = EmailMessage()
+    message["Subject"] = "caughtIn4K Pi setup QR"
+    message["To"] = row["email"]
+    message.set_content(
+        "You requested a copy of your new Pi's setup label.\n"
+        "Save the attached PNG and choose 'QR from gallery' in the app, "
+        "or use its setup text on the website.\n"
+        f"Expires: {row['pairing_expires_at'].isoformat()}.\n"
+        "This one-time ownership label stops working after pairing. "
+        "Keep it private and do not forward it. This email does not pair or reset a Pi.\n\n"
+        f"Setup text:\n{payload}\n"
+    )
+    message.add_attachment(png, maintype="image", subtype="png", filename="caughtin4k-pi-setup.png")
+    _send_message(message)
+    return {"success": True, "message": "Setup QR sent to your verified account email. Check your inbox."}
 
 
 def send_verification(account_id: UUID) -> dict:

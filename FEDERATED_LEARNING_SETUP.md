@@ -12,6 +12,31 @@ Pi's labeled CSV remains on the Pi unless someone copies it manually.
 
 ## Customer app and website rollout
 
+### New Pi setup QR copies
+
+The mobile **Scan Pi setup QR** screen supports camera scanning and
+**Choose QR from gallery**, including when camera access is denied.
+Only a valid version-1 setup label is accepted, not a Pi machine credential.
+
+In both mobile **Your smart home** and website **Manage homes**, scan or enter
+the new Pi's original setup label, then select **Email my setup QR**. The
+customer API validates the unpaired, unexpired, non-revoked gateway label and
+sends a PNG plus setup text only to the authenticated account's verified email.
+Requests are limited to three per account and three per gateway per 15 minutes.
+An email copy does not extend expiry, claim a Pi, change existing homes, or
+restore a consumed code. Protect the email as a one-time ownership secret.
+
+This requires deploying the updated customer backend with `requirements_cloud.txt`
+and working SMTP, publishing the rebuilt website, and installing the rebuilt
+mobile app. Existing paired Pi services and database schema need no change.
+No setup label can be generated for an already paired Pi through this option;
+new devices still require trusted operator provisioning.
+
+The demo sender's local authenticated gateway instructions are in
+[Fold8DemoSender/README.md](Fold8DemoSender/README.md). Its Pi-household account
+is distinct from the customer-cloud account, and it uses a separate laptop API
+on port 8002 rather than the private coordinator.
+
 IoT devices connect to the Pi Wi-Fi access point. The Pi captures traffic,
 runs detection and applies real firewall rules. Customers sign in to the shared
 service from any internet connection; they do not enter a server URL, operator

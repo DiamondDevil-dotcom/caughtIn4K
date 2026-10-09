@@ -1,4 +1,4 @@
-import { AlertTriangle, Cpu, LayoutGrid, LogOut, Moon, Network, Settings, Sun, Timer, Trash2, Wifi } from "lucide-react";
+import { AlertTriangle, Cpu, LayoutGrid, LogOut, Moon, Network, Settings, ShieldCheck, Sun, Timer, Trash2, Wifi } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 export function DashboardHeader({ account, light, onTheme, onLogout, busy, connected }) {
@@ -20,6 +20,33 @@ export function DashboardHeader({ account, light, onTheme, onLogout, busy, conne
   </header>;
 }
 
+export function NetworkIllustration() {
+  return <div className="network-illustration" aria-hidden="true">
+    <svg viewBox="0 0 320 320" fill="none">
+      <defs><radialGradient id="network-glow"><stop stopColor="currentColor" stopOpacity=".16" /><stop offset="1" stopColor="currentColor" stopOpacity="0" /></radialGradient></defs>
+      <circle cx="160" cy="160" r="156" fill="url(#network-glow)" />
+      <g className="network-rings"><circle cx="160" cy="160" r="62" /><circle cx="160" cy="160" r="108" /><circle cx="160" cy="160" r="146" /></g>
+      <g className="network-links"><path d="M160 160 86 82M160 160 264 137M160 160 106 254M160 160 46 173M160 160 232 264" /></g>
+      <g className="network-sweep"><path d="M160 160V14" /><circle cx="160" cy="14" r="3" /></g>
+      {[[86, 82], [264, 137], [106, 254], [46, 173], [232, 264]].map(([x, y], i) =>
+        <g key={x} className={`network-node node-${i}`}><circle cx={x} cy={y} r="12" /><circle cx={x} cy={y} r="3" fill="currentColor" /></g>)}
+      <circle cx="160" cy="160" r="26" className="network-hub" />
+      <path d="m160 145 12 5v10c0 8-12 15-12 15s-12-7-12-15v-10l12-5Z" strokeWidth="1.5" stroke="currentColor" />
+      <path d="m154 159 4 4 8-8" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  </div>;
+}
+
+export function SecurityIntro() {
+  return <aside className="security-intro">
+    <p className="dashboard-eyebrow"><ShieldCheck size={15} /> Your connected home, in view</p>
+    <h1>Less noise.<br /><span>More clarity.</span></h1>
+    <p>See the devices on your Pi network, review detection events, and manage your home from one place.</p>
+    <NetworkIllustration />
+    <div className="intro-notes"><span>Local gateway</span><span>Shared household access</span><span>Confirmed device actions</span></div>
+  </aside>;
+}
+
 export function DashboardSidebar({ tab, onTab, alertCount }) {
   const items = [
     ["Home", "Operations", LayoutGrid],
@@ -29,8 +56,9 @@ export function DashboardSidebar({ tab, onTab, alertCount }) {
   ];
   return <aside className="app-sidebar dashboard-sidebar">
     <p className="dashboard-eyebrow">Security intelligence</p>
-    <h1>Know your exposure.</h1>
-    <p className="dashboard-intro">A shared view for security leaders and engineering teams to understand IoT risk, validate model decisions, and respond with evidence.</p>
+    <h1>Your home.<br />In focus.</h1>
+    <p className="dashboard-intro">Devices, detection history, and Pi controls. One place to see what needs your attention.</p>
+    <NetworkIllustration />
     <nav aria-label="Dashboard sections">
       {items.map(([value, label, Icon]) => <button key={value}
         aria-current={tab === value || (value === "Home" && tab === "Devices") ? "page" : undefined}

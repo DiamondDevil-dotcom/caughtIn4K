@@ -38,6 +38,19 @@ function client(fetcher, store = storage()) {
   cloud.select(home);
   return cloud;
 }
+
+test("setup QR email failures are actionable without leaking server diagnostics", async () => {
+  for (const [status, text] of [
+    [400, "invalid, expired, or already paired"], [403, "Verify your account email"],
+    [503, "could not be sent"], [429, "Too many requests"],
+  ]) {
+    const cloud = client(async () => response({detail:"private database diagnostic"}, status));
+    await assert.rejects(
+      cloud.request("POST", "/cloud/gateways/email-setup-qr", {gateway_id: "gateway", pairing_code: "test"}),
+      error => error.status === status && error.message.includes(text) && !error.message.includes("private database"),
+    );
+  }
+});
 function commandFetcher(status = "queued", changes = {}) {
   let command;
   return async (url, request) => {

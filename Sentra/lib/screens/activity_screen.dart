@@ -33,12 +33,17 @@ class ActivityScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          if (!RouterApiService.cloudMode) _liveActivity(fold.isEmpty ? null : fold.first)
-          else Text(router.cloudFreshness),
+          if (!RouterApiService.cloudMode)
+            _liveActivity(fold.isEmpty ? null : fold.first)
+          else
+            Text(router.cloudFreshness),
           const SizedBox(height: 12),
           Text(
             "Recent Detections",
-            style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold),
+            style: GoogleFonts.spaceGrotesk(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 12),
           if (activity.lastError != null)
@@ -57,26 +62,70 @@ class ActivityScreen extends StatelessWidget {
               color: Colors.grey,
               icon: Icons.radar,
             ),
-          ...activity.events.map(_eventTile),
+          ...activity.events.map((event) => _eventTile(event, router.devices)),
         ],
       ),
     );
   }
 
-  Widget _eventTile(Map<String, dynamic> event) {
+  String _eventDeviceName(
+    Map<String, dynamic> event,
+    List<Map<String, dynamic>> devices,
+  ) {
+    String? usableName(Object? value) {
+      if (value is! String) return null;
+      final name = value.trim();
+      if (name.isEmpty ||
+          const {
+            'unknown',
+            'unknown device',
+            'device',
+            'iot device',
+          }.contains(name.toLowerCase()) ||
+          RegExp(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$').hasMatch(name)) {
+        return null;
+      }
+      return name;
+    }
+
+    final mac = (event['mac'] as String? ?? '').trim().toLowerCase();
+    if (mac.isNotEmpty) {
+      for (final device in devices) {
+        if ((device['mac'] as String? ?? '').trim().toLowerCase() == mac) {
+          final name = usableName(device['name']);
+          if (name != null) return name;
+        }
+      }
+    }
+    return usableName(event['name']) ?? 'Unnamed device';
+  }
+
+  Widget _eventTile(
+    Map<String, dynamic> event,
+    List<Map<String, dynamic>> devices,
+  ) {
     final status = event["status"] as String? ?? "SAFE";
-    final attackProbability = (event["attack_probability"] as num? ?? 0).toDouble();
-    final isAttack = status == "WARNING" || status == "ALERT" || status == "BLOCKED";
+    final attackProbability = (event["attack_probability"] as num? ?? 0)
+        .toDouble();
+    final isAttack =
+        status == "WARNING" ||
+        status == "ALERT" ||
+        status == "ATTACK" ||
+        status == "BLOCKED";
     final confidence = isAttack ? attackProbability : 100 - attackProbability;
-    final confidenceLabel = isAttack ? "attack confidence" : "benign confidence";
-    final color = {
+    final confidenceLabel = isAttack
+        ? "attack confidence"
+        : "benign confidence";
+    final color =
+        {
           "SAFE": Colors.green,
           "WARNING": Colors.orange,
           "ALERT": Colors.red,
           "BLOCKED": Colors.grey,
         }[status] ??
         Colors.blueGrey;
-    final icon = {
+    final icon =
+        {
           "SAFE": Icons.check_circle,
           "WARNING": Icons.warning_amber_rounded,
           "ALERT": Icons.error,
@@ -84,19 +133,22 @@ class ActivityScreen extends StatelessWidget {
         }[status] ??
         Icons.radar;
     final timestamp = event["timestamp"] is num
-        ? DateTime.fromMillisecondsSinceEpoch((event["timestamp"] as num).toInt() * 1000)
-        : event["timestamp"] is String ? DateTime.tryParse(event["timestamp"] as String)?.toLocal() : null;
+        ? DateTime.fromMillisecondsSinceEpoch(
+            (event["timestamp"] as num).toInt() * 1000,
+          )
+        : event["timestamp"] is String
+        ? DateTime.tryParse(event["timestamp"] as String)?.toLocal()
+        : null;
     final time = timestamp == null
         ? "--"
         : "${timestamp.hour.toString().padLeft(2, '0')}:"
-            "${timestamp.minute.toString().padLeft(2, '0')}:"
-            "${timestamp.second.toString().padLeft(2, '0')}";
+              "${timestamp.minute.toString().padLeft(2, '0')}:"
+              "${timestamp.second.toString().padLeft(2, '0')}";
 
     return ActivityTile(
       time: time,
-      title: "${event["name"] ?? event["mac"] ?? "Device"}: $status",
-      subtitle: "${event["ip_address"] ?? "unknown ip"}  |  "
-          "${confidence.toStringAsFixed(2)}% $confidenceLabel",
+      title: "${_eventDeviceName(event, devices)}: $status",
+      subtitle: "${confidence.toStringAsFixed(2)}% $confidenceLabel",
       color: color,
       icon: icon,
     );
@@ -109,38 +161,38 @@ class ActivityScreen extends StatelessWidget {
     final color = isAlert
         ? Colors.redAccent
         : isSafe
-            ? Colors.greenAccent
-            : Colors.orangeAccent;
+        ? Colors.greenAccent
+        : Colors.orangeAccent;
     final time = "Live";
     final liveDevice = device;
-    final attackProbability = (device?["attack_probability"] as num? ?? 0).toDouble();
+    final attackProbability = (device?["attack_probability"] as num? ?? 0)
+        .toDouble();
     final confidence = isAlert || status == "WARNING"
-      ? attackProbability
-      : 100 - attackProbability;
+        ? attackProbability
+        : 100 - attackProbability;
     final confidenceLabel = isAlert || status == "WARNING"
-      ? "attack confidence"
-      : "benign confidence";
+        ? "attack confidence"
+        : "benign confidence";
 
     return ActivityTile(
       time: time,
       title: liveDevice == null
-        ? "Waiting for live traffic"
-        : "Live model: ${liveDevice["prediction"] ?? status}",
+          ? "Waiting for live traffic"
+          : "Live model: ${liveDevice["prediction"] ?? status}",
       subtitle: liveDevice == null
-        ? "Router telemetry stream"
+          ? "Router telemetry stream"
           : "${liveDevice["name"] ?? "IoT device"}  |  ${confidence.toStringAsFixed(2)}% $confidenceLabel",
       color: color,
       icon: isAlert
           ? Icons.warning_amber_rounded
           : isSafe
-              ? Icons.check_circle
-              : Icons.radar,
+          ? Icons.check_circle
+          : Icons.radar,
     );
   }
 }
 
 class ActivityTile extends StatelessWidget {
-
   final String time;
   final String title;
   final String subtitle;
@@ -158,39 +210,33 @@ class ActivityTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 18),
       child: LiquidGlassSurface(
         padding: const EdgeInsets.all(18),
         child: Row(
           children: [
-
             CircleAvatar(
               radius: 24,
               backgroundColor: color.withOpacity(.15),
-              child: Icon(
-                icon,
-                color: color,
-              ),
+              child: Icon(icon, color: color),
             ),
 
-            const SizedBox(width:18),
+            const SizedBox(width: 18),
 
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-
                   Text(
                     title,
                     style: GoogleFonts.spaceGrotesk(
-                      fontSize:18,
+                      fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
 
-                  const SizedBox(height:4),
+                  const SizedBox(height: 4),
 
                   Text(
                     subtitle,
@@ -198,7 +244,6 @@ class ActivityTile extends StatelessWidget {
                       color: Theme.of(context).textTheme.bodyMedium?.color,
                     ),
                   ),
-
                 ],
               ),
             ),
@@ -209,7 +254,6 @@ class ActivityTile extends StatelessWidget {
                 color: Theme.of(context).textTheme.bodyMedium?.color,
               ),
             ),
-
           ],
         ),
       ),

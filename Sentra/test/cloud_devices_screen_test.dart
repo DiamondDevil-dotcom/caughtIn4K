@@ -209,6 +209,16 @@ void main() {
     expect(find.textContaining('Read-only'), findsOneWidget);
   });
 
+  testWidgets('device list retains its original name, IP and MAC details', (
+    tester,
+  ) async {
+    router.devices.single['ip_address'] = '192.168.50.22';
+    await mount(tester, 'owner');
+    expect(find.text('Test phone'), findsOneWidget);
+    expect(find.text('192.168.50.22\naa:bb:cc:dd:ee:ff'), findsOneWidget);
+    expect(find.text('Edit name'), findsNothing);
+  });
+
   testWidgets(
     'owner gets confirmation and pending/stale controls are disabled',
     (tester) async {

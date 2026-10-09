@@ -184,6 +184,18 @@ class CloudApiService {
         throw Exception('Cloud session or gateway changed.');
       }
       if (response.statusCode != expected) {
+        if (path == '/cloud/gateways/email-setup-qr') {
+          const messages = {
+            400: 'This setup label is invalid, expired, or already paired. Use the original label for a new, unpaired Pi.',
+            403: 'Verify your account email before requesting a setup QR.',
+            422: 'Use a valid Pi setup label without any machine credential.',
+            503: 'The setup QR could not be sent. Email or account storage is unavailable; try again later.',
+          };
+          final message = messages[response.statusCode];
+          if (message != null) {
+            throw CloudRequestException(response.statusCode, message: message);
+          }
+        }
         if (path == '/cloud/auth/signup' && response.statusCode == 409) {
           throw Exception(
             'An account with this email already exists. Sign in, or use Forgot password. To test isolation, use an email that has not been registered.',

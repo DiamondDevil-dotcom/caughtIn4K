@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CloudClient, LiveAlertTracker, recentWarnings, snapshotStale, trainingReady } from "./cloud-client";
-import { CustomerDeviceCard, DashboardHeader, DashboardMetrics, DashboardSidebar, DetectionHistory } from "./customer-dashboard";
+import { CustomerDeviceCard, DashboardHeader, DashboardMetrics, DashboardSidebar, DetectionHistory, SecurityIntro } from "./customer-dashboard";
+import { parseSetupLabel } from "./setup-label";
 import "./customer.css";
 
 export default function CustomerApp() {
@@ -210,7 +211,7 @@ export default function CustomerApp() {
     {syncError && <p role="alert" className="customer-error">Live updates: {syncError}</p>}
     {notificationError && <p role="alert" className="customer-error">{notificationError}</p>}
     {message && <p role="status">{message}</p>}
-    {!account ? <section className="customer-panel customer-login login-panel">
+    {!account ? <div className="login-layout"><SecurityIntro /><section className="customer-panel customer-login login-panel">
       <p className="dashboard-eyebrow">{signup ? "Create your secure home account" : "Authorized access"}</p>
       <h2>{recovery ? "Recover your account" : signup ? "Create an account" : "Sign in"}</h2>
       <form onSubmit={(event) => {
@@ -237,7 +238,7 @@ export default function CustomerApp() {
       </form>
       <button disabled={busy} onClick={() => { setSignup(!signup); setRecovery(false); }}>{signup ? "Already have an account? Sign in" : "Create account"}</button>
       <button disabled={busy} onClick={() => { setRecovery(!recovery); setSignup(false); }}>{recovery ? "Back to sign in" : "Forgot password?"}</button>
-    </section> : !account.email_verified ? <section className="customer-panel">
+    </section></div> : !account.email_verified ? <section className="customer-panel">
       <h2>Verify your email</h2><p>Verify {account.email} before accessing a home.</p>
       <button disabled={busy} onClick={() => run(async () =>
         setMessage((await cloud.request("POST", "/cloud/auth/request-verification")).message))}>Send verification code</button>
@@ -252,15 +253,25 @@ export default function CustomerApp() {
       <button disabled={busy} onClick={() => setTick((value) => value + 1)}>Refresh homes</button>
       <h3>Pair your Pi</h3><p>Scan the setup label in the mobile app, or paste its setup text here. Never paste the gateway machine credential.</p>
       <form onSubmit={(event) => { const data = values(event); run(async () => {
-        const label = JSON.parse(data.setup);
-        if (label.version !== 1 || typeof label.gateway_id !== "string" || typeof label.pairing_code !== "string") throw new Error("Invalid Pi setup label.");
+        const label = parseSetupLabel(data.setup);
         await cloud.request("POST", "/cloud/gateways/pair", {
           gateway_id: label.gateway_id, pairing_code: label.pairing_code, household_name: data.name,
         }, 201);
         setTick((value) => value + 1);
       }); }}>
         <label>Home name<input name="name" defaultValue="My home" required maxLength={200} /></label>
-        <label>Pi setup label<textarea name="setup" required /></label><button disabled={busy}>Pair Pi</button>
+        <label>Pi setup label<textarea name="setup" required maxLength={2048} /></label><button disabled={busy}>Pair Pi</button>
+        <button type="button" disabled={busy} onClick={(event) => {
+          const setup = event.currentTarget.form.elements.setup.value;
+          run(async () => {
+            const label = parseSetupLabel(setup);
+            const result = await cloud.request("POST", "/cloud/gateways/email-setup-qr", {
+              gateway_id: label.gateway_id, pairing_code: label.pairing_code,
+            });
+            setMessage(result.message);
+          });
+        }}>Email my setup QR</button>
+        <small>Enter your new Pi's setup label first. A PNG copy goes only to your verified account email; it keeps its original expiry and stops working once paired. Your existing homes are not changed.</small>
       </form>
       <form onSubmit={(event) => { const data = values(event); run(async () => {
         await cloud.request("POST", "/cloud/household-invites/accept", { invite_code: data.code });

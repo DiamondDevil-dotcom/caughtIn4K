@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'dart:convert';
-
 import 'setup_qr_screen.dart';
+import '../models/setup_label.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/cloud_api_service.dart';
@@ -59,22 +58,14 @@ class _CloudGatewayScreenState extends State<CloudGatewayScreen> {
     });
     try {
       if (pairing) {
-        final label = jsonDecode(setup.text.trim());
-        if (label is! Map ||
-            label['version'] != 1 ||
-            label['gateway_id'] is! String ||
-            label['pairing_code'] is! String) {
-          throw const FormatException(
-            'Use the caughtIn4K setup QR label supplied with your Pi.',
-          );
-        }
+        final label = SetupLabel.parse(setup.text.trim());
         await CloudApiService.request(
           'POST',
           '/cloud/gateways/pair',
           expected: 201,
           body: {
-            'gateway_id': label['gateway_id'],
-            'pairing_code': label['pairing_code'],
+            'gateway_id': label.gatewayId,
+            'pairing_code': label.pairingCode,
             'household_name': homeName.text.trim(),
           },
         );
@@ -86,6 +77,32 @@ class _CloudGatewayScreenState extends State<CloudGatewayScreen> {
         );
       }
       if (mounted) setState(() => _choices = load());
+    } catch (exception) {
+      if (mounted) setState(() => error = '$exception');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> emailSetupQr() async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final label = SetupLabel.parse(setup.text.trim());
+      final result = await CloudApiService.request(
+        'POST',
+        '/cloud/gateways/email-setup-qr',
+        body: {
+          'gateway_id': label.gatewayId,
+          'pairing_code': label.pairingCode,
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(result['message'] as String)));
+      }
     } catch (exception) {
       if (mounted) setState(() => error = '$exception');
     } finally {
@@ -179,6 +196,16 @@ class _CloudGatewayScreenState extends State<CloudGatewayScreen> {
             FilledButton(
               onPressed: busy ? null : () => join(true),
               child: const Text('Pair my Pi'),
+            ),
+            TextButton.icon(
+              onPressed: busy ? null : emailSetupQr,
+              icon: const Icon(Icons.mail_outline),
+              label: const Text('Email my setup QR'),
+            ),
+            const Text(
+              'Scan or enter your new Pi label first. A copy is sent only to your '
+              'verified account email. It expires at the original time and works '
+              'only until the Pi is paired. Existing homes are not changed.',
             ),
             const Divider(),
             TextField(

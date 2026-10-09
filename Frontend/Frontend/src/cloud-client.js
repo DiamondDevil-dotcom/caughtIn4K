@@ -78,6 +78,14 @@ export class CloudClient {
     if (version !== this.generation) throw new Error("Account or home changed.");
     if (response.status !== expected) {
       let message;
+      if (path === "/cloud/gateways/email-setup-qr") {
+        message = {
+          400: "This setup label is invalid, expired, or already paired. Use the original label for a new, unpaired Pi.",
+          403: "Verify your account email before requesting a setup QR.",
+          422: "Use a valid Pi setup label without any machine credential.",
+          503: "The setup QR could not be sent. Email or account storage is unavailable; try again later.",
+        }[response.status];
+      }
       if (path === "/cloud/auth/signup") {
         message = response.status === 409
           ? "An account with this email already exists. Sign in or use Forgot password."
