@@ -110,9 +110,59 @@
 @keyframes network-flow { to { stroke-dashoffset: -100; } }
 @keyframes network-orbit { to { transform: rotate(360deg); } }
 @keyframes network-breathe { 50% { opacity: .4; } }
-html[data-customer-theme="light"] .customer-app { --surface: #fff; --surface-soft: #f1f6f5; --line: #d9e4e4; --text: #172e34; --muted: #52686f; --accent: #216d59; --danger: #aa3e35; --button: #e3efeb; --button-hover: #d7e8e2; }
-html[data-customer-theme="light"] .customer-app button:not(.device-unblock):not([aria-current]) { color: var(--text); }
-html[data-customer-theme="light"] .customer-login form > button { color: #fff; }
+html:root[data-customer-theme="light"] { color-scheme: light; background: #f3f6fa; }
+html:root[data-customer-theme="light"] body {
+  background-color: #f3f6fa;
+  background-image: radial-gradient(ellipse at 5% 0%, #dceeea80, transparent 40rem), radial-gradient(ellipse at 95% 100%, #dfe9f580, transparent 40rem);
+  background-size: auto;
+}
+html[data-customer-theme="light"] .customer-app {
+  --surface: #fff;
+  --surface-soft: #f5f8fb;
+  --line: #dce4ed;
+  --text: #182c40;
+  --muted: #52657a;
+  --accent: #096b61;
+  --danger: #b33232;
+  --button: #096b61;
+  --button-hover: #07584f;
+}
+html[data-customer-theme="light"] .customer-app .customer-panel,
+html[data-customer-theme="light"] .customer-app .dashboard-device,
+html[data-customer-theme="light"] .customer-app .dashboard-metric {
+  box-shadow: 0 4px 8px #182c4003, 0 16px 40px #182c4008;
+}
+html[data-customer-theme="light"] .customer-app button { color: #fff; border-color: #096b61; font-weight: 500; }
+html[data-customer-theme="light"] .customer-app input,
+html[data-customer-theme="light"] .customer-app textarea,
+html[data-customer-theme="light"] .customer-app select { border-color: #c4d1df; }
+html[data-customer-theme="light"] .dashboard-header { border-color: #ccd9e3; }
+html[data-customer-theme="light"] .brand-logo { border-radius: 10px; box-shadow: 0 2px 8px #182c4026; }
+html[data-customer-theme="light"] .dashboard-account button { color: var(--text); border-color: transparent; }
+html[data-customer-theme="light"] .dashboard-account button:last-child { color: var(--danger); }
+html[data-customer-theme="light"] .dashboard-account button:hover:not(:disabled) { background: #e3ecef; }
+html[data-customer-theme="light"] .dashboard-sidebar nav button { color: var(--muted); border-color: transparent; font-weight: 500; }
+html[data-customer-theme="light"] .dashboard-sidebar nav button:hover:not(:disabled) { color: var(--accent); background: #e4eeed; }
+html[data-customer-theme="light"] .dashboard-sidebar nav button[aria-current] { color: #07584f; border-color: #bedbd5; background: #dceee9; box-shadow: inset 3px 0 var(--accent); }
+html[data-customer-theme="light"] .dashboard-count { color: #07584f; background: #cbe2dc; }
+html[data-customer-theme="light"] .connection-indicator.connected::before { box-shadow: 0 0 0 4px #096b6114; }
+html[data-customer-theme="light"] .dashboard-sidebar .network-illustration { opacity: 1; }
+html[data-customer-theme="light"] .network-rings { stroke-opacity: .24; }
+html[data-customer-theme="light"] .network-links { stroke-opacity: .4; }
+html[data-customer-theme="light"] .network-sweep { opacity: .55; }
+html[data-customer-theme="light"] .network-node { stroke-opacity: .7; }
+html[data-customer-theme="light"] .device-icon,
+html[data-customer-theme="light"] .device-safe { background: #e0f1ea; }
+html[data-customer-theme="light"] .device-threat { background: #fce9e7; }
+html[data-customer-theme="light"] .dashboard-device .device-block { color: var(--danger); border-color: #e8b8b8; background: #fff7f6; }
+html[data-customer-theme="light"] .dashboard-device .device-block:hover:not(:disabled) { background: #fce9e7; border-color: var(--danger); }
+html[data-customer-theme="light"] .dashboard-device .device-unblock { color: #fff; }
+html[data-customer-theme="light"] .dashboard-device .device-remove,
+html[data-customer-theme="light"] .customer-login > button { color: var(--muted); border-color: var(--line); background: transparent; }
+html[data-customer-theme="light"] .dashboard-device .device-remove:hover:not(:disabled),
+html[data-customer-theme="light"] .customer-login > button:hover:not(:disabled) { color: var(--text); background: var(--surface-soft); }
+html[data-customer-theme="light"] .customer-error { background: #fff2f0; border-color: #edc2bd; }
+html[data-customer-theme="light"] .customer-app > p[role="status"] { background: #e2f0eb; border-radius: 0 10px 10px 0; }
 @media (max-width: 1200px) {
   .customer-app { padding: 24px 32px; }
   .dashboard-device-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
