@@ -199,7 +199,7 @@ export default function CustomerApp() {
         if (!["queued", "delivered"].includes(result.status)) {
           throw new Error(`Command not confirmed: ${result.status}. Check ${action === "train" ? "training" : "device"} state before retrying.`);
         }
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       throw new Error("Timed out. Check command status before retrying.");
   }

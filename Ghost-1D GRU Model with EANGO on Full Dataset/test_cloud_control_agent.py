@@ -9,6 +9,33 @@ from cloud_uploader import UploadConfig, UploadError, PermanentUploadError
 
 
 class ControlAgentTests(unittest.TestCase):
+    def test_successful_poll_cadence_includes_request_time(self):
+        worker = MagicMock(config=self.config)
+        with patch.object(agent.time, "monotonic", side_effect=[100, 100.75]), \
+             patch.object(agent.time, "sleep", side_effect=KeyboardInterrupt) as sleep:
+            with self.assertRaises(KeyboardInterrupt):
+                agent.run_worker(worker)
+        worker.poll.assert_called_once()
+        sleep.assert_called_once_with(1.25)
+
+    def test_slow_successful_poll_does_not_add_another_delay(self):
+        worker = MagicMock(config=self.config)
+        with patch.object(agent.time, "monotonic", side_effect=[100, 103]), \
+             patch.object(agent.time, "sleep", side_effect=KeyboardInterrupt) as sleep:
+            with self.assertRaises(KeyboardInterrupt):
+                agent.run_worker(worker)
+        sleep.assert_called_once_with(0)
+
+    def test_fast_poll_preserves_failure_backoff(self):
+        worker = MagicMock(config=self.config)
+        worker.poll.side_effect = UploadError("offline")
+        with patch.object(agent, "retry_delay", return_value=14) as retry, \
+             patch.object(agent.time, "sleep", side_effect=KeyboardInterrupt) as sleep:
+            with self.assertRaises(KeyboardInterrupt):
+                agent.run_worker(worker)
+        retry.assert_called_once_with(1, 10)
+        sleep.assert_called_once_with(14)
+
     def setUp(self):
         self.config = UploadConfig(
             "https://staging.example", uuid4(),

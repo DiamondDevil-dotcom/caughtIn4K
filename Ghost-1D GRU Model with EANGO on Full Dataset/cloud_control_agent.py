@@ -114,6 +114,23 @@ class ControlWorker:
         self.pending_result = None
 
 
+def run_worker(worker: ControlWorker) -> None:
+    failures = 0
+    while True:
+        started = time.monotonic()
+        try:
+            worker.poll()
+        except PermanentUploadError:
+            raise
+        except UploadError as error:
+            failures += 1
+            logger.warning("%s", error)
+            time.sleep(retry_delay(failures, 10))
+        else:
+            failures = 0
+            time.sleep(max(0, worker.config.interval - (time.monotonic() - started)))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     if os.getenv("GHOST_CLOUD_CONTROL_ENABLED", "false").lower() != "true":
@@ -129,20 +146,8 @@ def main() -> None:
     except ValueError:
         raise SystemExit("Invalid cloud command configuration. Check private gateway settings.") from None
     worker = ControlWorker(config)
-    failures = 0
     try:
-        while True:
-            try:
-                worker.poll()
-            except PermanentUploadError:
-                raise
-            except UploadError as error:
-                failures += 1
-                logger.warning("%s", error)
-                time.sleep(retry_delay(failures, 10))
-            else:
-                failures = 0
-                time.sleep(10)
+        run_worker(worker)
     except PermanentUploadError as error:
         raise SystemExit(str(error)) from None
     except KeyboardInterrupt:

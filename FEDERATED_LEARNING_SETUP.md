@@ -551,10 +551,16 @@ replaced. The new channel remains disabled on the Pi by default.
   presence. Only one queued/delivered command per gateway is allowed.
   A queued command expires after 120 seconds rather than executing on a
   device that reconnects much later.
-- The separate `cloud_control_agent.py` polls outbound every 10 seconds with
+- The separate `cloud_control_agent.py` polls outbound on a 2-second cadence with
   the gateway machine credential and, during private staging, the staging
   token. Delivery rechecks the initiating account's owner/admin role.
-  This is independent of the 30-second metadata uploader and Flower.
+  Request time counts toward this cadence rather than adding a further sleep.
+  Transient failures retain the existing 10-second-base exponential backoff.
+  This is independent of the 2-second metadata uploader and Flower. Mobile
+  and website command-result checks wait 1 second between requests and still
+  require a successful `applied` acknowledgement, never just queue acceptance.
+  Restart the Pi command-worker service after installing this source update;
+  rebuild/install mobile and deploy the website for their shorter result checks.
 - The Pi endpoint `/cloud-agent/control` requires the local private router
   token, a loopback connection, and `GHOST_CLOUD_CONTROL_ENABLED=true` in
   the router process. Set the same flag for the separate worker service.

@@ -418,7 +418,7 @@ class CloudApiService {
   static Future<Map<String, dynamic>> control(
     String? mac,
     String action, {
-    Duration pollInterval = const Duration(seconds: 3),
+    Duration pollInterval = const Duration(seconds: 1),
     Duration wait = const Duration(seconds: 150),
     String? deviceName,
     String? ipAddress,
