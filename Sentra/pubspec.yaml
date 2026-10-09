@@ -58,6 +58,7 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/images/caughtIn4k_logo.png"
+  remove_alpha_ios: true
   adaptive_icon_background: "#090B12"
   
   # The "flutter_lints" package below contains a set of recommended lints to

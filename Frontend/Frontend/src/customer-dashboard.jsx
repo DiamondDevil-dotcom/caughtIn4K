@@ -4,7 +4,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 export function DashboardHeader({ account, light, onTheme, onLogout, busy, connected }) {
   return <header className="app-header dashboard-header">
     <div className="brand-lockup">
-      <img className="brand-logo" src="/caughtIn4k_logo.png" alt="" />
+      <img className="brand-logo" src="/caughtIn4k_logo.png?v=20261009" alt="" />
       <span><strong>caughtIn4K</strong><small>IoT security intelligence</small></span>
     </div>
     <div className="dashboard-account">
