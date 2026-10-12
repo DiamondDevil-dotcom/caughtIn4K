@@ -1,7 +1,7 @@
 export function snapshotStale(snapshot, now = Date.now()) {
   const time = Date.parse(snapshot?.observed_at);
   return !snapshot || snapshot.data_stale || !snapshot.recent_contact ||
-    !Number.isFinite(time) || time > now || now - time > 90_000;
+    !Number.isFinite(time) || time - now > 5_000 || now - time > 90_000;
 }
 
 export function trainingReady(snapshot, now = Date.now()) {

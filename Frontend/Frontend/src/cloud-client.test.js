@@ -299,6 +299,24 @@ test("freshness thresholds match mobile: snapshots 90s, training 30s, warnings 6
   assert.equal(recentWarnings(data, now + 1).length, 0);
 });
 
+test("snapshot freshness tolerates bounded clock skew without hiding stale or offline data", () => {
+  const now = Date.now();
+  const data = snapshot();
+  for (const ahead of [838, 5_000]) {
+    data.observed_at = new Date(now + ahead).toISOString();
+    assert.equal(snapshotStale(data, now), false);
+  }
+  data.observed_at = new Date(now + 5_001).toISOString();
+  assert.equal(snapshotStale(data, now), true);
+  data.observed_at = new Date(now - 90_001).toISOString();
+  assert.equal(snapshotStale(data, now), true);
+  data.observed_at = new Date(now).toISOString();
+  assert.equal(snapshotStale({ ...data, data_stale: true }, now), true);
+  assert.equal(snapshotStale({ ...data, recent_contact: false }, now), true);
+  assert.equal(snapshotStale({ ...data, observed_at: "invalid" }, now), true);
+  assert.equal(snapshotStale(null, now), true);
+});
+
 test("two clients observe the same authoritative device state and model progress", async () => {
   let state = snapshot();
   let command;
