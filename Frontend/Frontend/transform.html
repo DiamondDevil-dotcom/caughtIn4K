@@ -421,7 +421,7 @@
     .workspace {
       position: absolute;
       z-index: 3;
-      inset: max(90px, 12dvh) 39vw 3dvh 5vw;
+      inset: max(90px, 12dvh) 5vw 12dvh;
       overflow: auto;
       overscroll-behavior: contain;
       border: 0;
@@ -433,29 +433,33 @@
       font-family: "Space Grotesk", Arial, sans-serif;
     }
     .workspace[hidden] { display: none; }
-    html[data-customer-theme="light"] .workspace { background: #edf3f3f2; border-radius: 20px; padding: 18px; }
+    html[data-customer-theme="light"] {
+      --surface: #f4f2ef;
+      --ink: #172d29;
+      --accent: #176b55;
+      --button: #176b55;
+      --button-hover: #125441;
+      --button-text: #ffffff;
+    }
+    html[data-customer-theme="light"] body { color: var(--ink); }
+    html[data-customer-theme="light"] .ci4k-word__pink { background-image: linear-gradient(180deg, #307d63, #15533e); }
+    html[data-customer-theme="light"] .support-copy { color: #314b43; }
+    html[data-customer-theme="light"] .menu-sheet { background: #f4f2efed; border-color: #176b5533; }
+    html[data-customer-theme="light"] .menu-sheet li + li { border-color: #176b5526; }
+    html[data-customer-theme="light"] .workspace { color: var(--ink); }
     html[data-customer-theme="light"] .workspace-heading { border-color: #096b6133; color: #182930; }
     html[data-customer-theme="light"] .workspace-heading a { color: #096b61; }
-    .workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 0 12px; border-bottom: 1px solid #7ce0be20; }
-    .workspace-heading h2 { margin: 0; font-size: 11px; font-weight: 400; text-transform: uppercase; letter-spacing: .22em; }
-    .workspace-heading a { color: var(--accent); font-size: 11px; }
-    .workspace-open .ci4k-word {
-      top: 16dvh;
-      left: 64vw;
-      width: 34vw;
-      text-align: center;
-      font-size: min(5.4vw, 10dvh);
-      letter-spacing: 0;
-    }
-    .workspace-open .flower { top: 25dvh; left: 82vw; height: 70dvh; }
-    .workspace-open .support-copy--left { left: 67vw; bottom: 5dvh; font-size: clamp(13px, 1.1vw, 18px); }
-    .workspace-open .support-copy--right { display: none; }
+    .workspace-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
     @media (max-width: 900px), (max-aspect-ratio: 4 / 5) {
-      .workspace { inset: max(260px, 39dvh) 3vw 2dvh; }
-      .workspace-heading { padding: 0 8px 12px; }
-      .workspace-open .ci4k-word { top: calc(10dvh + env(safe-area-inset-top, 0px)); left: 0; width: 100%; font-size: min(14vw, 10dvh); }
-      .workspace-open .flower { top: 15dvh; left: 56vw; height: min(23dvh, 65vw); }
-      .workspace-open .support-copy { display: none; }
+      .pill.style-toggle {
+        display: inline-flex;
+        top: calc(2.141745dvh + env(safe-area-inset-top, 0px));
+        right: calc(5vw + 60px + env(safe-area-inset-right, 0px));
+        height: 46px;
+        font-size: 13px;
+        padding: 0 16px;
+      }
+      .workspace { inset: calc(82px + env(safe-area-inset-top, 0px)) 4vw 14dvh; }
     }
   </style>
 </head>
@@ -518,7 +522,6 @@
       <section class="workspace" aria-labelledby="workspace-title" hidden>
         <div class="workspace-heading">
           <h2 id="workspace-title" tabindex="-1">Home</h2>
-          <a href="#poster">Back to poster</a>
         </div>
         <div id="root"></div>
       </section>
@@ -800,13 +803,13 @@
 
       stage.addEventListener("mouseenter", (event) => {
         track(event);
-        hovering = !event.target.closest(".workspace");
+        hovering = true;
         lastSample = null;
         wake();
       });
       stage.addEventListener("mousemove", (event) => {
         track(event);
-        hovering = !event.target.closest(".workspace");
+        hovering = true;
         wake();
       });
       stage.addEventListener("mouseleave", () => {

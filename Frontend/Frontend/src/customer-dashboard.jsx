@@ -6,9 +6,8 @@ export function DashboardHeader({ account, light, onTheme, onLogout, busy, conne
     <span className="lily-account-status">{account ? <>
       <span className={`connection-indicator ${connected ? "connected" : ""}`}>{connected ? "Home connected" : "Awaiting home data"}</span>
       <span>{account.name}</span>
-    </> : "Your private home starts here."}</span>
+    </> : null}</span>
     <div>
-      <a className="transform-link" href={`/?tab=${tab}`} title="Switch to original style"><Sparkles size={14} /> Transform</a>
       <button aria-label={light ? "Use dark theme" : "Use light theme"} onClick={onTheme}>
         {light ? <Moon size={16} /> : <Sun size={16} />}
       </button>

@@ -307,16 +307,18 @@ with in-page Home, Devices, Activity, Model and Settings sections. These section
 mount the same customer application and preserve its account session, polling,
 authorization and command-confirmation guards; they do not navigate back to the
 original dashboard. Sign-in is required before household data is displayed.
-The section hash survives reload; the logo and Back to poster link restore the
-lily artwork. Vite builds both `index.html` and `transform.html` as entry points.
-The lily remains visible alongside every section and the styled sign-in form.
+The section hash survives reload; the logo restores the lily artwork. Vite builds both `index.html` and `transform.html` as entry points.
+The full-size lily poster remains behind every section and the styled sign-in form,
+with the same wordmark, artwork placement and corner copy as the poster view.
 Transform is available before and after sign-in in both presentations; switching
 styles keeps the current tab and same browser account session.
 The lily presentation uses its own account bar, editorial section headings,
 sign-in/create-account/recovery treatment and translucent content surfaces rather
 than embedding the original dashboard panel. Its functional controls continue to
-use the shared customer API logic. On mobile the lily occupies the upper hero area
-and section content scrolls below it without covering the artwork with text.
+use the shared customer API logic. Content scrolls inside translucent overlays;
+the poster stays fixed behind it on desktop and mobile. Transform remains visible
+in the top bar on mobile and desktop. Light mode uses an ivory poster palette
+and translucent light surfaces with dark-green text.
 
 Both clients poll every two seconds while active. A command acknowledged by
 the Pi becomes visible to the other client through the next fresh snapshot.

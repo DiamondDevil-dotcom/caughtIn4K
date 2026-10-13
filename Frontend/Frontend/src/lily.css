@@ -1,7 +1,9 @@
 .transform-workspace.customer-app {
-  padding: 0 18px 20px 0;
-  --surface: #142132b3;
-  --surface-soft: #172739b3;
+  padding: 0 20px 30px;
+  max-width: 620px;
+  margin: 0 0 0 auto;
+  --surface: #07111fc9;
+  --surface-soft: #07111fd9;
   --line: #7ce0be26;
 }
 .lily-account-bar {
@@ -10,8 +12,13 @@
   justify-content: space-between;
   gap: 12px;
   padding: 16px 0;
-  color: var(--muted);
+  color: var(--text);
   font-size: 11px;
+  background: #07111fc9;
+  padding: 12px 18px;
+  border-radius: 18px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .lily-account-status, .lily-account-bar > div { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .transform-workspace .lily-account-bar button {
@@ -35,7 +42,7 @@
 .transform-workspace .lily-login-intro h1 {
   font-family: "CaughtIn4K Display", "Times New Roman", serif;
   font-weight: 400;
-  font-size: clamp(42px, 4.6vw, 78px);
+  font-size: clamp(36px, 3.4vw, 54px);
   line-height: 1.02;
   letter-spacing: -.025em;
   margin: 0 0 18px;
@@ -50,11 +57,13 @@
 .transform-workspace .lily-section-intro { padding: 26px 0 12px; }
 .transform-workspace .login-layout { margin: 0; }
 .transform-workspace .customer-login {
-  max-width: none;
-  margin: 12px 0 0;
-  padding: 0;
+  max-width: 580px;
+  margin: 8px auto 0;
+  padding: 32px;
   border: 0;
-  background: transparent;
+  background: #07111fd6;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow: none;
 }
 .transform-workspace .lily-login-intro { margin-bottom: 32px; }
@@ -64,7 +73,7 @@
   letter-spacing: -.02em;
   margin-bottom: 8px;
 }
-.transform-workspace .customer-login form { max-width: 420px; gap: 18px; margin: 22px 0 14px; }
+.transform-workspace .customer-login form { max-width: none; gap: 18px; margin: 22px 0 14px; }
 .transform-workspace .customer-login input {
   border: 0;
   border-bottom: 1px solid #7ce0be55;
@@ -94,9 +103,11 @@
   box-shadow: none;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 6px 24px 6px 24px;
+  border-radius: 18px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
-.transform-workspace .customer-login { border: 0; border-radius: 0; background: transparent; }
+.transform-workspace .customer-login { border: 1px solid #ffffff20; border-radius: 24px; background: #07111fd6; }
 .transform-workspace .customer-panel h2,
 .transform-workspace .operations-section h2,
 .transform-workspace .history-heading h2 {
@@ -109,12 +120,61 @@
 .transform-workspace .dashboard-metric p { font-family: "CaughtIn4K Display", "Times New Roman", serif; font-size: 38px; font-weight: 400; }
 .transform-workspace .dashboard-device h3 { font-family: "CaughtIn4K Display", "Times New Roman", serif; font-size: 26px; font-weight: 400; }
 .transform-workspace .dashboard-device-top { margin-bottom: 16px; }
-.transform-workspace .home-overview { border: 0; border-left: 1px solid var(--accent); border-radius: 0; padding: 8px 22px; background: transparent; }
+.transform-workspace .home-overview { border: 1px solid var(--line); border-radius: 18px; padding: 24px; background: var(--surface); }
 .transform-workspace .dashboard-footer { font-size: 9px; letter-spacing: .1em; }
 .transform-workspace .customer-panel p { font-size: 13px; }
 .transform-workspace .customer-panel form { max-width: none; }
+.transform-workspace .lily-section-intro {
+  background: #07111fbf;
+  border-radius: 18px;
+  padding: 28px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html[data-customer-theme="light"] .transform-workspace.customer-app {
+  --surface: #fffdf9e6;
+  --surface-soft: #f2f1ebe6;
+  --line: #176b5533;
+  --text: #172d29;
+  --muted: #4a625a;
+  --accent: #176b55;
+  --button: #176b55;
+  --button-hover: #125441;
+}
+html[data-customer-theme="light"] .transform-workspace .lily-section-intro,
+html[data-customer-theme="light"] .transform-workspace .lily-account-bar,
+html[data-customer-theme="light"] .transform-workspace .customer-login {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--line);
+}
+html[data-customer-theme="light"] .transform-workspace .customer-login input {
+  background: var(--surface-soft);
+  color: var(--text);
+  border-color: #176b5566;
+}
+html[data-customer-theme="light"] .transform-workspace .lily-account-bar button,
+html[data-customer-theme="light"] .transform-workspace .customer-login > button { color: var(--muted); }
+html[data-customer-theme="light"] .transform-workspace .customer-login form > button {
+  background: var(--button);
+  color: #ffffff;
+}
+html[data-customer-theme="light"] .transform-workspace .customer-login form > button:hover:not(:disabled) { background: var(--button-hover); }
+html[data-customer-theme="light"] .transform-workspace.customer-app {
+  background-color: transparent !important;
+}
+html[data-customer-theme="light"] .transform-workspace .customer-panel,
+html[data-customer-theme="light"] .transform-workspace .dashboard-device,
+html[data-customer-theme="light"] .transform-workspace .dashboard-metric,
+html[data-customer-theme="light"] .transform-workspace .customer-login {
+  background-color: #fffdf9d9 !important;
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+}
+.transform-workspace .dashboard-footer { background: var(--surface); border-radius: 12px; padding: 16px; }
 @media (max-width: 900px) {
   .transform-workspace.customer-app { padding: 0 8px 20px; }
+  .transform-workspace .customer-login { padding: 24px; }
   .transform-workspace .lily-section-intro h1, .transform-workspace .lily-login-intro h1 { font-size: clamp(36px, 7vw, 60px); }
   .transform-workspace .lily-login-intro { margin-bottom: 24px; }
   .lily-account-bar { padding: 12px 0; }
