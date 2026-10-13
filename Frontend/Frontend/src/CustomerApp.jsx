@@ -3,8 +3,10 @@ import { CloudClient, LiveAlertTracker, recentWarnings, snapshotStale, trainingR
 import { CustomerDeviceCard, DashboardHeader, DashboardMetrics, DashboardSidebar, DetectionHistory, SecurityIntro } from "./customer-dashboard";
 import { parseSetupLabel } from "./setup-label";
 import "./customer.css";
+import "./lily.css";
 
 export default function CustomerApp() {
+  const transformed = window.location.pathname === "/transform.html";
   const [cloud] = useState(() => new CloudClient(import.meta.env.VITE_CLOUD_API_URL || "https://caughtin4k-1.onrender.com"));
   const [account, setAccount] = useState(cloud.account);
   const [home, setHome] = useState(null);
@@ -18,7 +20,21 @@ export default function CustomerApp() {
   const [recovery, setRecovery] = useState(false);
   const [tick, setTick] = useState(0);
   const [now, setNow] = useState(Date.now());
-  const [tab, setTab] = useState("Home");
+  const [tab, setTab] = useState(() => {
+    const requested = transformed ? window.location.hash.slice(1) : new URLSearchParams(window.location.search).get("tab");
+    return ["Home", "Devices", "Activity", "Model", "Settings"].includes(requested) ? requested : "Home";
+  });
+  useEffect(() => {
+    if (!transformed) return;
+    const navigate = (event) => {
+      if (["Home", "Devices", "Activity", "Model", "Settings"].includes(event.detail)) setTab(event.detail);
+    };
+    window.addEventListener("ci4k:navigate", navigate);
+    return () => window.removeEventListener("ci4k:navigate", navigate);
+  }, [transformed]);
+  useEffect(() => {
+    if (transformed) window.dispatchEvent(new CustomEvent("ci4k:tab", { detail: tab }));
+  }, [tab, transformed]);
   const [light, setLight] = useState(() => localStorage.getItem("customer-theme") === "light");
   const [notifications, setNotifications] = useState(false);
   const [liveAlerts, setLiveAlerts] = useState([]);
@@ -83,12 +99,13 @@ export default function CustomerApp() {
     finally { running.current = false; if (mounted.current) setBusy(false); }
   }
 
-  function choose(choice) {
+  function choose(choice, automatic = false) {
     choosingHome.current = false;
     alertTracker.current.reset(); setLiveAlerts([]);
     for (const notification of openNotifications.current) notification.close();
     openNotifications.current.clear();
-    cloud.select(choice); setHome(choice); setSnapshot(null); setError(""); setSyncError(""); setMessage(""); setTab("Home");
+    cloud.select(choice); setHome(choice); setSnapshot(null); setError(""); setSyncError(""); setMessage("");
+    if (!transformed && !automatic) setTab("Home");
   }
 
   function manageHomes() {
@@ -106,7 +123,7 @@ export default function CustomerApp() {
     cloud.homes().then((choices) => {
       if (!active) return;
       setHomes(choices);
-      if (choices.length === 1 && !choosingHome.current) choose(choices[0]);
+      if (choices.length === 1 && !choosingHome.current) choose(choices[0], true);
     }).catch((failure) => { if (active) setError(failure.message); });
     return () => { active = false; };
   }, [account, home, tick]);
@@ -204,16 +221,39 @@ export default function CustomerApp() {
       throw new Error("Timed out. Check command status before retrying.");
   }
 
-  return <main className={`customer-app ${home ? "site-shell" : "login-shell"}`}>
+  return <main className={`customer-app ${home ? "site-shell" : "login-shell"} ${transformed ? "transform-workspace" : ""}`}>
     <DashboardHeader account={account} light={light} onTheme={() => setLight(value => !value)}
-      onLogout={logout} busy={busy} connected={!stale && Boolean(home)} />
+      onLogout={logout} busy={busy} connected={!stale && Boolean(home)} transformed={transformed} tab={tab} />
+    {transformed && home && <div className="lily-section-intro">
+      <p className="lily-kicker">caughtIn4K / {tab}</p>
+      <h1>{{
+        Home: <>Your home.<br /><em>In full bloom.</em></>,
+        Devices: <>Every connection.<br /><em>In your care.</em></>,
+        Activity: <>The signals.<br /><em>Beyond the noise.</em></>,
+        Model: <>Learning together.<br /><em>Protecting privately.</em></>,
+        Settings: <>Your space.<br /><em>Your rules.</em></>,
+      }[tab]}</h1>
+      <p>{{
+        Home: "A live view of your home gateway, connected devices and recent threats.",
+        Devices: "Know what's connected. Take confirmed action when it matters.",
+        Activity: "Detection events reported by your gateway, without invented classifications.",
+        Model: "Federated training progress and the model actually reported by your Pi.",
+        Settings: "Your household, access and notification preferences, in one place.",
+      }[tab]}</p>
+    </div>}
     {error && <p role="alert" className="customer-error">{error}</p>}
     {syncError && <p role="alert" className="customer-error">Live updates: {syncError}</p>}
     {notificationError && <p role="alert" className="customer-error">{notificationError}</p>}
     {message && <p role="status">{message}</p>}
-    {!account ? <div className="login-layout"><SecurityIntro /><section className="customer-panel customer-login login-panel">
+    {!account ? <div className="login-layout">{!transformed && <SecurityIntro />}<section className="customer-panel customer-login login-panel">
+      {transformed && <div className="lily-login-intro">
+        <p className="lily-kicker">Private by design. Connected by choice.</p>
+        <h1>{recovery ? <>Find your way<br /><em>back home.</em></> : signup ? <>A new home.<br /><em>A safer beginning.</em></> : <>A safer home.<br /><em>In full bloom.</em></>}</h1>
+        <p>Your devices. Your privacy. One quietly connected space.</p>
+      </div>}
       <p className="dashboard-eyebrow">{signup ? "Create your secure home account" : "Authorized access"}</p>
       <h2>{recovery ? "Recover your account" : signup ? "Create an account" : "Sign in"}</h2>
+      {transformed && <p className="transform-login-copy">Use your existing caughtIn4K account to access your home.</p>}
       <form onSubmit={(event) => {
         const data = values(event);
         run(async () => {
@@ -279,7 +319,7 @@ export default function CustomerApp() {
       }); }}><label>Household invitation code<input name="code" required /></label><button disabled={busy}>Join home</button></form>
     </section> : <>
       <div className="dashboard-layout">
-      <DashboardSidebar tab={tab} onTab={setTab} alertCount={snapshot?.alerts.length ?? 0} />
+      {!transformed && <DashboardSidebar tab={tab} onTab={setTab} alertCount={snapshot?.alerts.length ?? 0} />}
       <div className="app-content dashboard-content">
       {cloud.pending?.unconfirmed && <section className="customer-panel" aria-label="Command recovery">
         <p>A {cloud.pending.action === "train" ? "training start" : "device action"} is awaiting confirmation. Do not send it again.</p>

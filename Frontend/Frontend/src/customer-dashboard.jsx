@@ -1,13 +1,28 @@
-import { AlertTriangle, Cpu, LayoutGrid, LogOut, Moon, Network, Settings, ShieldCheck, Sun, Timer, Trash2, Wifi } from "lucide-react";
+import { AlertTriangle, Cpu, LayoutGrid, LogOut, Moon, Network, Settings, ShieldCheck, Sparkles, Sun, Timer, Trash2, Wifi } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-export function DashboardHeader({ account, light, onTheme, onLogout, busy, connected }) {
+export function DashboardHeader({ account, light, onTheme, onLogout, busy, connected, transformed = false, tab = "Home" }) {
+  if (transformed) return <header className="lily-account-bar">
+    <span className="lily-account-status">{account ? <>
+      <span className={`connection-indicator ${connected ? "connected" : ""}`}>{connected ? "Home connected" : "Awaiting home data"}</span>
+      <span>{account.name}</span>
+    </> : "Your private home starts here."}</span>
+    <div>
+      <a className="transform-link" href={`/?tab=${tab}`} title="Switch to original style"><Sparkles size={14} /> Transform</a>
+      <button aria-label={light ? "Use dark theme" : "Use light theme"} onClick={onTheme}>
+        {light ? <Moon size={16} /> : <Sun size={16} />}
+      </button>
+      {account && <button disabled={busy} onClick={onLogout}><LogOut size={14} /> Sign out</button>}
+    </div>
+  </header>;
   return <header className="app-header dashboard-header">
     <div className="brand-lockup">
       <img className="brand-logo" src="/caughtIn4k_logo.png?v=20261009" alt="" />
       <span><strong>caughtIn4K</strong><small>IoT security intelligence</small></span>
     </div>
     <div className="dashboard-account">
+      <a className="transform-link" href={transformed ? `/?tab=${tab}` : `/transform.html#${tab}`}
+        title={transformed ? "Switch to original style" : "Switch to lily style"}><Sparkles size={14} /> Transform</a>
       <button aria-label={light ? "Use dark theme" : "Use light theme"} onClick={onTheme}>
         {light ? <Moon size={17} /> : <Sun size={17} />}
       </button>

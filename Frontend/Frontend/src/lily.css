@@ -1,0 +1,126 @@
+.transform-workspace.customer-app {
+  padding: 0 18px 20px 0;
+  --surface: #142132b3;
+  --surface-soft: #172739b3;
+  --line: #7ce0be26;
+}
+.lily-account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.lily-account-status, .lily-account-bar > div { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.transform-workspace .lily-account-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+}
+.transform-workspace .lily-kicker {
+  color: var(--accent);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .18em;
+  margin: 0 0 20px;
+}
+.transform-workspace .lily-section-intro h1,
+.transform-workspace .lily-login-intro h1 {
+  font-family: "CaughtIn4K Display", "Times New Roman", serif;
+  font-weight: 400;
+  font-size: clamp(42px, 4.6vw, 78px);
+  line-height: 1.02;
+  letter-spacing: -.025em;
+  margin: 0 0 18px;
+}
+.lily-section-intro h1 em, .lily-login-intro h1 em { color: var(--accent); font-style: normal; }
+.transform-workspace .lily-section-intro > p:last-child,
+.transform-workspace .lily-login-intro > p:last-child {
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 440px;
+}
+.transform-workspace .lily-section-intro { padding: 26px 0 12px; }
+.transform-workspace .login-layout { margin: 0; }
+.transform-workspace .customer-login {
+  max-width: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.transform-workspace .lily-login-intro { margin-bottom: 32px; }
+.transform-workspace .customer-login h2 {
+  font-family: "Space Grotesk", Arial, sans-serif;
+  font-size: 22px;
+  letter-spacing: -.02em;
+  margin-bottom: 8px;
+}
+.transform-workspace .customer-login form { max-width: 420px; gap: 18px; margin: 22px 0 14px; }
+.transform-workspace .customer-login input {
+  border: 0;
+  border-bottom: 1px solid #7ce0be55;
+  border-radius: 0;
+  background: #14213266;
+  padding: 14px 12px;
+}
+.transform-workspace .customer-login form > button {
+  background: var(--accent);
+  color: #07111f;
+  border: 0;
+  padding: 14px 18px;
+  margin: 6px 0 0;
+}
+.transform-workspace .customer-login form > button:hover:not(:disabled) { background: #b8f5dc; }
+.transform-workspace .customer-login > button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 8px 0;
+  margin: 0 20px 0 0;
+  font-size: 12px;
+}
+.transform-workspace .customer-panel,
+.transform-workspace .dashboard-device,
+.transform-workspace .dashboard-metric {
+  box-shadow: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px 24px 6px 24px;
+}
+.transform-workspace .customer-login { border: 0; border-radius: 0; background: transparent; }
+.transform-workspace .customer-panel h2,
+.transform-workspace .operations-section h2,
+.transform-workspace .history-heading h2 {
+  font-family: "CaughtIn4K Display", "Times New Roman", serif;
+  font-weight: 400;
+  font-size: 32px;
+  letter-spacing: 0;
+}
+.transform-workspace .customer-login h2 { font-family: "Space Grotesk", Arial, sans-serif; font-size: 22px; }
+.transform-workspace .dashboard-metric p { font-family: "CaughtIn4K Display", "Times New Roman", serif; font-size: 38px; font-weight: 400; }
+.transform-workspace .dashboard-device h3 { font-family: "CaughtIn4K Display", "Times New Roman", serif; font-size: 26px; font-weight: 400; }
+.transform-workspace .dashboard-device-top { margin-bottom: 16px; }
+.transform-workspace .home-overview { border: 0; border-left: 1px solid var(--accent); border-radius: 0; padding: 8px 22px; background: transparent; }
+.transform-workspace .dashboard-footer { font-size: 9px; letter-spacing: .1em; }
+.transform-workspace .customer-panel p { font-size: 13px; }
+.transform-workspace .customer-panel form { max-width: none; }
+@media (max-width: 900px) {
+  .transform-workspace.customer-app { padding: 0 8px 20px; }
+  .transform-workspace .lily-section-intro h1, .transform-workspace .lily-login-intro h1 { font-size: clamp(36px, 7vw, 60px); }
+  .transform-workspace .lily-login-intro { margin-bottom: 24px; }
+  .lily-account-bar { padding: 12px 0; }
+}
+@media (max-width: 600px) {
+  .transform-workspace .dashboard-metrics { gap: 8px; }
+  .transform-workspace .dashboard-metric { padding: 14px; }
+  .transform-workspace .dashboard-metric p { font-size: 30px; }
+}

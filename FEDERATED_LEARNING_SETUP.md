@@ -301,6 +301,23 @@ These views show real Pi data; there are no simulated devices or independent
 website model runs. The chart groups uploaded detection statuses rather than
 inventing attack-type labels. Legacy access-audit data is not exposed through
 the customer API, so it is not substituted with fabricated login records.
+
+The header's Transform link opens `/transform.html`, an alternative poster shell
+with in-page Home, Devices, Activity, Model and Settings sections. These sections
+mount the same customer application and preserve its account session, polling,
+authorization and command-confirmation guards; they do not navigate back to the
+original dashboard. Sign-in is required before household data is displayed.
+The section hash survives reload; the logo and Back to poster link restore the
+lily artwork. Vite builds both `index.html` and `transform.html` as entry points.
+The lily remains visible alongside every section and the styled sign-in form.
+Transform is available before and after sign-in in both presentations; switching
+styles keeps the current tab and same browser account session.
+The lily presentation uses its own account bar, editorial section headings,
+sign-in/create-account/recovery treatment and translucent content surfaces rather
+than embedding the original dashboard panel. Its functional controls continue to
+use the shared customer API logic. On mobile the lily occupies the upper hero area
+and section content scrolls below it without covering the artwork with text.
+
 Both clients poll every two seconds while active. A command acknowledged by
 the Pi becomes visible to the other client through the next fresh snapshot.
 Browser background throttling, network delay and a sleeping backend can slow

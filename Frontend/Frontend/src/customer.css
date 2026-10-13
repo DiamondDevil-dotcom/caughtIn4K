@@ -39,6 +39,19 @@
 .dashboard-account { display: flex; align-items: center; gap: 16px; font-size: .75rem; color: var(--muted); }
 .dashboard-account button { display: inline-flex; align-items: center; gap: 7px; background: transparent; border-color: transparent; padding: 8px; margin: 0; }
 .dashboard-account button:last-child { color: var(--danger); }
+.transform-link { display: inline-flex; align-items: center; gap: 7px; background: var(--button); color: var(--text); border: 1px solid #7ce0be33; border-radius: 10px; padding: 8px 14px; font-size: .8125rem; text-decoration: none; transition: background-color 180ms, border-color 180ms; }
+.transform-link:hover { border-color: var(--accent); background: var(--button-hover); }
+.transform-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.transform-workspace.customer-app { min-height: 0; max-width: none; padding: 20px 28px; font-family: "Space Grotesk", Arial, sans-serif; background: transparent !important; }
+.transform-workspace .brand-lockup { display: none; }
+.transform-workspace .dashboard-header { justify-content: flex-end; padding-bottom: 14px; }
+.transform-workspace .dashboard-account { flex-wrap: wrap; justify-content: flex-end; }
+.transform-workspace .dashboard-layout { padding: 20px 0; }
+.transform-workspace .login-layout { display: block; }
+.transform-workspace .login-panel { max-width: 520px; margin: 20px auto; }
+@media (max-width: 900px) {
+  .transform-workspace.customer-app { padding: 16px 18px; }
+}
 .connection-indicator { display: inline-flex; align-items: center; gap: 8px; }
 .connection-indicator::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #f7c275; }
 .connection-indicator.connected::before { background: var(--accent); box-shadow: 0 0 0 4px #7ce0be12; }
@@ -194,4 +207,39 @@ html[data-customer-theme="light"] .customer-app > p[role="status"] { background:
 @media (prefers-reduced-motion: reduce) {
   .network-links, .network-sweep, .network-node { animation: none; }
   .customer-app button, .dashboard-device { transition: none; }
+}
+
+.transform-workspace .customer-panel,
+.transform-workspace .dashboard-device,
+.transform-workspace .dashboard-metric {
+  background: #142132ba;
+  border-color: #7ce0be26;
+  border-radius: 22px;
+}
+.transform-workspace .customer-login {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 12px 0 24px;
+}
+.transform-workspace .customer-login h2 {
+  font-family: "CaughtIn4K Display", "Times New Roman", serif;
+  font-weight: 400;
+  font-size: clamp(36px, 4vw, 64px);
+}
+.transform-workspace .transform-login-brand {
+  font-family: "CaughtIn4K Display", "Times New Roman", serif;
+  font-size: clamp(26px, 3vw, 42px);
+  line-height: 1.2;
+  margin-bottom: 24px;
+}
+.transform-login-brand span { color: var(--accent); }
+.transform-workspace .transform-login-copy { color: var(--muted); font-size: .875rem; }
+.transform-workspace input, .transform-workspace select, .transform-workspace textarea { border-radius: 16px; }
+.transform-workspace button, .transform-workspace .transform-link { border-radius: 999px; }
+.transform-workspace .dashboard-device-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.transform-workspace .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.transform-workspace .history-summary { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 600px) {
+  .transform-workspace .dashboard-device-grid { grid-template-columns: minmax(0, 1fr); }
 }
