@@ -78,6 +78,13 @@ export class CloudClient {
     if (version !== this.generation) throw new Error("Account or home changed.");
     if (response.status !== expected) {
       let message;
+      if (path === "/cloud/assistant/chat") {
+        message = {
+          403: "Verify your email before using AI help.",
+          422: "Enter a question between 1 and 2000 characters.",
+          503: "AI help is unavailable or not configured yet. Try again later.",
+        }[response.status];
+      }
       if (path === "/cloud/gateways/email-setup-qr") {
         message = {
           400: "This setup label is invalid, expired, or already paired. Use the original label for a new, unpaired Pi.",

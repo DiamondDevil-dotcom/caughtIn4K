@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CloudClient, LiveAlertTracker, recentWarnings, snapshotStale, trainingReady } from "./cloud-client";
 import { CustomerDeviceCard, DashboardHeader, DashboardMetrics, DashboardSidebar, DetectionHistory, SecurityIntro } from "./customer-dashboard";
 import { parseSetupLabel } from "./setup-label";
+import AssistantChat from "./AssistantChat";
 import "./customer.css";
 import "./lily.css";
 
@@ -421,6 +422,7 @@ export default function CustomerApp() {
       </div>
       </div>
     </>}
+    {account?.email_verified && <AssistantChat key={account.account_id} cloud={cloud} />}
     {home && <footer className="dashboard-footer"><span>GHOST-1D-GRU / EA-NGO</span><span>SECURITY OPERATIONS PLATFORM</span></footer>}
   </main>;
 }

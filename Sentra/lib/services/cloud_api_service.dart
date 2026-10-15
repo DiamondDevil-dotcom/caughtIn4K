@@ -184,6 +184,17 @@ class CloudApiService {
         throw Exception('Cloud session or gateway changed.');
       }
       if (response.statusCode != expected) {
+        if (path == '/cloud/assistant/chat') {
+          const messages = {
+            403: 'Verify your email before using AI help.',
+            422: 'Enter a question between 1 and 2000 characters.',
+            503: 'AI help is unavailable or not configured yet. Try again later.',
+          };
+          final message = messages[response.statusCode];
+          if (message != null) {
+            throw CloudRequestException(response.statusCode, message: message);
+          }
+        }
         if (path == '/cloud/gateways/email-setup-qr') {
           const messages = {
             400: 'This setup label is invalid, expired, or already paired. Use the original label for a new, unpaired Pi.',

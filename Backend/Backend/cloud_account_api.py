@@ -19,6 +19,7 @@ import cloud_monitoring as monitoring
 import cloud_commands as commands
 import cloud_account_security as security
 import cloud_push
+import cloud_assistant
 from cloud_database import CloudDatabaseError
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ class LoginInput(BaseModel):
 
 class SignupInput(LoginInput):
     name: str = Field(min_length=1, max_length=200)
+
+
+class AssistantInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(min_length=1, max_length=2000, pattern=r"\S")
 
 
 class SetupQrInput(BaseModel):
@@ -106,6 +112,14 @@ def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
             "token_type": "bearer",
             "expires_in": accounts.SESSION_SECONDS,
         }
+
+    @router.post("/assistant/chat")
+    async def assistant_chat(payload: AssistantInput, account=Depends(current_account)):
+        if account.get("email_verified_at") is None:
+            raise HTTPException(403, "Verify your email before using AI help.")
+        await operation(security.limit, "assistant:" + str(account["id"]), secret, 10, 60)
+        await operation(security.limit, "assistant:global", secret, 100, 60)
+        return await operation(cloud_assistant.answer, payload.message)
 
     @router.post("/auth/signup", status_code=201)
     async def signup(payload: SignupInput):

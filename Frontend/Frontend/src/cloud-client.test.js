@@ -60,9 +60,27 @@ function commandFetcher(status = "queued", changes = {}) {
       command = { ...body, id: body.command_id, gateway_id: home.gateway_id };
       return response(command, 202);
     }
+
     return response({ ...command, status, result_code: status === "succeeded" ? "applied" : null, ...changes });
   };
 }
+
+test("AI help sends only a typed question and masks upstream diagnostics", async () => {
+  const cloud = client(async (url, request) => {
+    assert.equal(url, "https://home.example.invalid/cloud/assistant/chat");
+    assert.deepEqual(JSON.parse(request.body), {message: "How do I set up?"});
+    return response({reply: "Use the setup wizard."});
+  });
+  assert.deepEqual(await cloud.request("POST", "/cloud/assistant/chat", {
+    message: "How do I set up?",
+  }), {reply: "Use the setup wizard."});
+  for (const [status, text] of [[403, "Verify your email"], [422, "2000 characters"],
+    [429, "Too many requests"], [503, "unavailable or not configured"]]) {
+    const unavailable = client(async () => response({detail: "private API key diagnostic"}, status));
+    await assert.rejects(unavailable.request("POST", "/cloud/assistant/chat", {message: "Help"}),
+      error => error.status === status && error.message.includes(text) && !error.message.includes("private"));
+  }
+});
 
 test("normal account login never sends operator or machine credentials", async () => {
   const cloud = new CloudClient("https://home.example.invalid", { storage: storage(),

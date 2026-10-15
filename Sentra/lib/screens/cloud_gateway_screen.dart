@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'setup_qr_screen.dart';
+import 'assistant_screen.dart';
 import '../models/setup_label.dart';
 
 import '../providers/auth_provider.dart';
@@ -115,6 +116,14 @@ class _CloudGatewayScreenState extends State<CloudGatewayScreen> {
     appBar: AppBar(
       title: const Text('Your smart home'),
       actions: [
+        IconButton(
+          tooltip: 'AI help',
+          icon: const Icon(Icons.chat_bubble_outline),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AssistantScreen()),
+          ),
+        ),
         IconButton(
           onPressed: () => context.read<AuthProvider>().signOut(),
           icon: const Icon(Icons.logout),

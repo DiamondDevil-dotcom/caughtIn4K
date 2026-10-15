@@ -10,6 +10,7 @@ import '../providers/alert_provider.dart';
 import '../providers/router_device_provider.dart';
 import '../widgets/liquid_glass_button.dart';
 import 'alert_screen.dart';
+import 'assistant_screen.dart';
 import '../services/router_api_service.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -294,6 +295,16 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
+        actions: [
+          IconButton(
+            tooltip: 'AI help',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AssistantScreen()),
+            ),
+          ),
+        ],
         title: Text(
           'caughtIn4K',
           style: GoogleFonts.spaceGrotesk(

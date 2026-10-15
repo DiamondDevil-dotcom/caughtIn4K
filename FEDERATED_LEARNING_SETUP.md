@@ -1,5 +1,42 @@
 # Laptop + Raspberry Pi federated learning
 
+## Basic AI help (local release)
+
+This AI-only release adds text-only setup/security help to Sentra and both
+customer website layouts. It has no live device context or command tools.
+Signed-in customers must have verified email and agree before sending their
+typed question to OpenAI. Each question is independent. Chat remains only in
+screen/component memory; no chat history is sent or saved by the application.
+Never submit passwords, QR contents, credentials or private network data.
+
+Set these privately on the cloud backend, not in the app, website or Pi:
+
+```text
+GHOST_ASSISTANT_ENABLED=true
+OPENAI_API_KEY=<private-server-side-key>
+GHOST_ASSISTANT_MODEL=gpt-4.1-mini
+```
+
+The model must support OpenAI's Responses API and be available to the project.
+API billing is separate from ChatGPT subscriptions. Configure provider budget
+monitoring. Server limits are 10 requests/account/minute and 100 total/minute,
+2000 input characters and 500 output tokens; they are not spending caps.
+The assistant is disabled unless all settings are configured. Provider failures
+produce explicit errors, not fabricated answers or automatic retries.
+
+Requests use `store=false`; review OpenAI's retention policies before release.
+The application does not log chat/provider bodies. Configure external logging
+accordingly. Replies render as plain text. Tests use a mocked provider; a live
+check remains necessary after authorized deployment.
+
+This release is based on commit e89dbb9131d13c77171ce0858819d44835020b83.
+It leaves schema version 7 unchanged and excludes unfinished consumer Pi,
+Wi-Fi-wizard and QR-recovery changes. No new backend package is required.
+The existing cloud account and rate-limit database setup is required.
+The APK uses the repository's existing debug signing configuration and is for
+testing, not Play Store distribution. Neither code nor artifacts are deployed
+automatically.
+
 This setup uses the laptop as the Flower FedAvg coordinator and as one local
 training participant. The Raspberry Pi is the second participant. The Fold8
 demo app sends labeled feature examples to the Pi; the Pi stores and trains on
