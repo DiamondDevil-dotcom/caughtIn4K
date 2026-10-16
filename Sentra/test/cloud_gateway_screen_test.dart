@@ -34,6 +34,53 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('lost QR uses only the order and clears an obsolete label', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(900, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final requests = <http.Request>[];
+    await http.runWithClient(
+      () async {
+        await mount(tester);
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Pi setup label (or scan QR)'),
+          jsonEncode(label),
+        );
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Pi order reference'),
+          'order-123',
+        );
+        await tester.ensureVisible(find.text('Request replacement setup QR'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Request replacement setup QR'));
+        await tester.pumpAndSettle();
+        expect(find.text('Replacement sent.'), findsOneWidget);
+        final posts = requests
+            .where((request) => request.method == 'POST')
+            .toList();
+        expect(posts, hasLength(1));
+        expect(posts.single.url.path, '/cloud/gateways/replace-setup-qr');
+        expect(jsonDecode(posts.single.body), {'order_reference': 'order-123'});
+        final field = tester.widget<TextField>(
+          find.widgetWithText(TextField, 'Pi setup label (or scan QR)'),
+        );
+        expect(field.controller!.text, isEmpty);
+        expect(CloudApiService.gatewayId, isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+      () => MockClient((request) async {
+        requests.add(request);
+        return http.Response(
+          request.method == 'GET'
+              ? '{"households":[]}'
+              : '{"success":true,"message":"Replacement sent."}',
+          200,
+        );
+      }),
+    );
+  });
+
   testWidgets('email QR sends only the supplied label and never pairs a Pi', (
     tester,
   ) async {
@@ -110,4 +157,92 @@ void main() {
       }),
     );
   });
+
+  testWidgets(
+    'pairing a consumer Pi opens Wi-Fi setup without selecting the dashboard',
+    (tester) async {
+      bool paired = false;
+      await tester.binding.setSurfaceSize(const Size(900, 1800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await http.runWithClient(
+        () async {
+          await mount(tester);
+          await tester.enterText(
+            find.widgetWithText(TextField, 'Pi setup label (or scan QR)'),
+            jsonEncode(label),
+          );
+          await tester.ensureVisible(find.text('Pair my Pi'));
+          await tester.tap(find.text('Pair my Pi'));
+          await tester.pumpAndSettle();
+          expect(
+            find.text('Set up your caughtIn4K'),
+            findsOneWidget,
+            reason: find
+                .byType(Text)
+                .evaluate()
+                .map((element) => (element.widget as Text).data)
+                .join('\n'),
+          );
+          expect(CloudApiService.gatewayId, isNull);
+          // The consumed ownership label is not needed to resume setup.
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.text('Consumer home'));
+          await tester.tap(find.text('Consumer home'));
+          await tester.pumpAndSettle();
+          expect(find.text('Set up your caughtIn4K'), findsOneWidget);
+          await tester.pumpWidget(const SizedBox());
+        },
+        () => MockClient((request) async {
+          if (request.url.path == '/cloud/gateways/pair') {
+            paired = true;
+            return http.Response(
+              jsonEncode({'gateway_id': label['gateway_id']}),
+              201,
+            );
+          }
+          if (request.url.path == '/cloud/households') {
+            return http.Response(
+              jsonEncode({
+                'households': paired
+                    ? [
+                        {
+                          'household_id': 'home',
+                          'name': 'Consumer home',
+                          'role': 'owner',
+                        },
+                      ]
+                    : [],
+              }),
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/gateways')) {
+            return http.Response(
+              jsonEncode({
+                'gateways': [
+                  {
+                    'gateway_id': label['gateway_id'],
+                    'name': 'New Pi',
+                    'consumer_setup': true,
+                  },
+                ],
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'ready': false,
+              'recent_contact': false,
+              'configured': false,
+              'expired': false,
+              'checks': {},
+            }),
+            200,
+          );
+        }),
+      );
+    },
+  );
 }

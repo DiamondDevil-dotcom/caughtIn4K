@@ -10,6 +10,7 @@ import secrets
 import smtplib
 import ssl
 from email.message import EmailMessage
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import qrcode
@@ -20,6 +21,45 @@ from cloud_database import connect
 from cloud_gateways import secret_hash
 
 logger = logging.getLogger(__name__)
+
+
+def replace_setup_qr(account_id: UUID, order_reference: str) -> dict:
+    order = order_reference.strip()
+    if not 1 <= len(order) <= 200:
+        raise HTTPException(400, "Order is invalid or unavailable for setup recovery.")
+    code = secrets.token_urlsafe(32)
+    expiry = datetime.now(timezone.utc) + timedelta(hours=24)
+    with connect() as connection:
+        # Share the gateway row lock with pairing so only a claim or replacement wins.
+        row = connection.execute(
+            "SELECT g.id, a.email FROM caughtin4k.gateways g "
+            "JOIN caughtin4k.gateway_purchases p ON p.gateway_id = g.id "
+            "JOIN caughtin4k.accounts a ON a.id = %s AND a.email = p.purchaser_email "
+            "WHERE p.order_reference = %s AND a.email_verified_at IS NOT NULL "
+            "AND g.household_id IS NULL AND g.revoked_at IS NULL FOR UPDATE OF g",
+            (account_id, order),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(400, "Order is invalid or unavailable for setup recovery.")
+        connection.execute(
+            "UPDATE caughtin4k.gateways SET pairing_code_hash = %s, pairing_expires_at = %s "
+            "WHERE id = %s", (secret_hash(code), expiry, row["id"]),
+        )
+    # Commit revocation before delivery. On mail failure the old QR stays invalid;
+    # the customer can retry to rotate again, never resurrect an earlier label.
+    try:
+        email_setup_qr(account_id, row["id"], code)
+    except HTTPException as error:
+        if error.status_code == 503:
+            raise HTTPException(
+                503, "Replacement email could not be delivered. Previous QR codes are invalid. "
+                "Request another replacement later.",
+            ) from None
+        raise
+    return {"success": True, "message": (
+        "Replacement QR sent to your verified email. Earlier QR codes are invalid. "
+        "The replacement expires in 24 hours and works only once."
+    )}
 
 
 def limit(key: str, secret: str, maximum: int, seconds: int) -> None:

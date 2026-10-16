@@ -117,7 +117,7 @@ def list_gateways(account_id: UUID, household_id: UUID) -> list[dict[str, Any]]:
             # Same response for nonexistent and unauthorized households.
             raise HTTPException(status_code=404, detail="Household not found.")
         return connection.execute(
-            "SELECT g.id AS gateway_id, g.name, g.last_seen_at, g.revoked_at "
+            "SELECT g.id AS gateway_id, g.name, g.last_seen_at, g.revoked_at, g.consumer_setup "
             "FROM caughtin4k.gateways g "
             "JOIN caughtin4k.household_members m ON m.household_id = g.household_id "
             "WHERE g.household_id = %s AND m.account_id = %s ORDER BY g.created_at, g.id",

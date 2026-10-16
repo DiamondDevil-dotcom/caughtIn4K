@@ -426,6 +426,8 @@ class CloudApiService {
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
   }
 
+  static String newSetupRequestId() => _uuid();
+
   static Future<Map<String, dynamic>> control(
     String? mac,
     String action, {

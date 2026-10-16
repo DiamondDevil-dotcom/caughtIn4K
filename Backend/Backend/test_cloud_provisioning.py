@@ -42,6 +42,46 @@ class ProvisioningTests(unittest.TestCase):
                     )
             connect.assert_not_called()
 
+    def test_verified_purchase_is_bound_by_factory_not_included_in_qr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "consumer"
+            with patch.object(provisioning, "connect", side_effect=self.connection):
+                gateway = provisioning.provision_bundle(
+                    "Pi", datetime.now(timezone.utc) + timedelta(days=1),
+                    "https://cloud.example", output, verified_order=" order-123 ",
+                    purchaser_email=" Buyer@Example.com ",
+                )
+            purchase = [call for call in self.db.execute.call_args_list
+                        if "INSERT INTO caughtin4k.gateway_purchases" in call.args[0]]
+            self.assertEqual(purchase[0].args[1], (gateway, "order-123", "buyer@example.com"))
+            self.assertNotIn("buyer", (output / "pairing-label.json").read_text())
+
+    def test_partial_purchase_binding_rejected_before_writing(self):
+        with patch.object(provisioning, "create_private_directory") as create:
+            for kwargs in ({"verified_order": "order"}, {"purchaser_email": "buyer@example.com"}):
+                with self.assertRaises(ValueError):
+                    provisioning.provision_bundle(
+                        "Pi", datetime.now(timezone.utc) + timedelta(days=1),
+                        "https://cloud.example", Path("unused"), **kwargs,
+                    )
+        create.assert_not_called()
+
+    def test_consumer_setup_is_explicit_and_preserves_the_three_field_qr(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "consumer"
+            with patch.object(provisioning, "connect", side_effect=self.connection):
+                gateway_id = provisioning.provision_bundle(
+                    "Consumer Pi", datetime.now(timezone.utc) + timedelta(days=1),
+                    "https://cloud.example", output, consumer_setup=True,
+                )
+            self.assertEqual(set(json.loads((output / "pairing-label.json").read_text())),
+                             {"version", "gateway_id", "pairing_code"})
+            self.assertEqual((output / "consumer-setup.txt").read_text(), "enabled\n")
+            self.assertTrue(any(
+                "SET consumer_setup = TRUE" in call.args[0] and call.args[1] == (gateway_id,)
+                for call in self.db.execute.call_args_list
+            ))
+
     def test_repository_output_rejected(self):
         with self.assertRaises(provisioning.ProvisioningError):
             provisioning.create_private_directory(Path(__file__).resolve().parent / "private-bundle")

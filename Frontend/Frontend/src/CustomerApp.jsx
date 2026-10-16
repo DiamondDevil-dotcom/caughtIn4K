@@ -315,6 +315,16 @@ export default function CustomerApp() {
         <small>Enter your new Pi's setup label first. A PNG copy goes only to your verified account email; it keeps its original expiry and stops working once paired. Your existing homes are not changed.</small>
       </form>
       <form onSubmit={(event) => { const data = values(event); run(async () => {
+        const result = await cloud.request("POST", "/cloud/gateways/replace-setup-qr", {
+          order_reference: data.order_reference,
+        });
+        setMessage(result.message);
+      }); }}>
+        <label>Lost setup QR: Pi order reference<input name="order_reference" required maxLength={200} /></label>
+        <button disabled={busy}>Request replacement setup QR</button>
+        <small>Only an order linked to your verified email is eligible. Earlier QR codes are invalidated. Already paired? Sign in to your existing home instead.</small>
+      </form>
+      <form onSubmit={(event) => { const data = values(event); run(async () => {
         await cloud.request("POST", "/cloud/household-invites/accept", { invite_code: data.code });
         setTick((value) => value + 1);
       }); }}><label>Household invitation code<input name="code" required /></label><button disabled={busy}>Join home</button></form>

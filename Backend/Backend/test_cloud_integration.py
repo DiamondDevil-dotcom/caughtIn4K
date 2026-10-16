@@ -4,6 +4,7 @@ import os
 import secrets
 import hashlib
 import hmac
+import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,8 @@ import cloud_households as households
 import cloud_monitoring as monitoring
 import cloud_commands as commands
 import cloud_account_security as security
+import cloud_gateway_setup as setup
+from cryptography.fernet import Fernet
 from cloud_database import check_schema, connect, read_database_url
 
 
@@ -26,6 +29,157 @@ from cloud_database import check_schema, connect, read_database_url
     "Live cloud integration is explicit and opt-in.",
 )
 class CloudIntegrationTests(unittest.TestCase):
+    def test_purchase_replacement_cross_pi_replay_and_concurrent_claim(self):
+        check_schema()
+        account_id = None
+        registrations = []
+        try:
+            email = f"qr-recovery-{uuid4().hex}@example.invalid"
+            account_id = accounts.create_account(
+                "QR recovery test", email, secrets.token_urlsafe(24),
+            )["id"]
+            order = f"test-{uuid4()}"
+            registrations = [
+                gateways.provision_gateway(
+                    "QR recovery test", datetime.now(timezone.utc) + timedelta(hours=1),
+                ) for _ in range(2)
+            ]
+            gateway_id, other_id = [UUID(item["gateway_id"]) for item in registrations]
+            with connect() as connection:
+                connection.execute(
+                    "INSERT INTO caughtin4k.gateway_purchases "
+                    "(gateway_id, order_reference, purchaser_email) VALUES (%s, %s, %s)",
+                    (gateway_id, order, email),
+                )
+            with self.assertRaises(HTTPException):
+                security.replace_setup_qr(account_id, order)
+            with connect() as connection:
+                connection.execute(
+                    "UPDATE caughtin4k.accounts SET email_verified_at = now() WHERE id = %s",
+                    (account_id,),
+                )
+            with patch.object(security, "_send_message") as send:
+                security.replace_setup_qr(account_id, order)
+                first_message = send.call_args.args[0]
+                first_payload = json.loads(
+                    first_message.get_body(preferencelist=("plain",)).get_content().split("Setup text:\n")[1]
+                )
+                security.replace_setup_qr(account_id, order)
+                second_message = send.call_args.args[0]
+                second_payload = json.loads(
+                    second_message.get_body(preferencelist=("plain",)).get_content().split("Setup text:\n")[1]
+                )
+            for gateway, code in (
+                (gateway_id, registrations[0]["pairing_code"]),
+                (gateway_id, first_payload["pairing_code"]),
+                (other_id, second_payload["pairing_code"]),
+            ):
+                with self.assertRaises(HTTPException):
+                    gateways.pair_gateway(account_id, gateway, code, "Invalid claim")
+
+            def claim(_):
+                try:
+                    gateways.pair_gateway(
+                        account_id, gateway_id, second_payload["pairing_code"], "QR test home",
+                    )
+                    return True
+                except HTTPException as error:
+                    self.assertEqual(error.status_code, 400)
+                    return False
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                self.assertEqual(sum(pool.map(claim, range(2))), 1)
+            with self.assertRaises(HTTPException):
+                gateways.pair_gateway(account_id, gateway_id, second_payload["pairing_code"], "Replay")
+            with patch.object(security, "_send_message") as send:
+                with self.assertRaises(HTTPException):
+                    security.replace_setup_qr(account_id, order)
+                send.assert_not_called()
+        finally:
+            ids = [UUID(item["gateway_id"]) for item in registrations]
+            with connect() as connection:
+                homes = connection.execute(
+                    "SELECT household_id FROM caughtin4k.gateways WHERE id = ANY(%s)",
+                    (ids,),
+                ).fetchall()
+                connection.execute("DELETE FROM caughtin4k.gateway_purchases WHERE gateway_id = ANY(%s)", (ids,))
+                connection.execute("DELETE FROM caughtin4k.gateways WHERE id = ANY(%s)", (ids,))
+                home_ids = [row["household_id"] for row in homes if row["household_id"]]
+                connection.execute("DELETE FROM caughtin4k.household_members WHERE household_id = ANY(%s)", (home_ids,))
+                connection.execute("DELETE FROM caughtin4k.households WHERE id = ANY(%s)", (home_ids,))
+                if account_id is not None:
+                    connection.execute("DELETE FROM caughtin4k.accounts WHERE id = %s", (account_id,))
+
+    def test_consumer_setup_pair_deliver_apply_readback_and_expiry(self):
+        check_schema()
+        account = None
+        gateway = None
+        home = None
+        with patch.dict(os.environ, {
+            "GHOST_CLOUD_SETUP_ENABLED": "true",
+            "GHOST_CLOUD_SETUP_KEY": Fernet.generate_key().decode("ascii"),
+        }):
+            try:
+                account = accounts.create_account(
+                    "Setup integration", f"setup-{uuid4().hex}@example.invalid", secrets.token_urlsafe(24),
+                )["id"]
+                registration = gateways.provision_gateway(
+                    "Setup integration", datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+                gateway = UUID(registration["gateway_id"])
+                credential = registration["gateway_credential"]
+                with connect() as connection:
+                    connection.execute(
+                        "UPDATE caughtin4k.gateways SET consumer_setup = TRUE WHERE id = %s", (gateway,),
+                    )
+                report = setup.SetupReport(checks=dict.fromkeys(setup.CHECKS, False))
+                self.assertFalse(setup.exchange(gateway, credential, report)["paired"])
+                home = UUID(gateways.pair_gateway(
+                    account, gateway, registration["pairing_code"], "Setup test home",
+                )["household_id"])
+                body = {"request_id": str(uuid4()), "ssid": "Integration IoT", "password": secrets.token_urlsafe(18)}
+                setup.configure_wifi(account, home, gateway, body)
+                self.assertFalse(setup.read_setup(account, home, gateway)["ready"])
+                with self.assertRaises(HTTPException):
+                    setup.exchange(gateway, "invalid-machine-credential-32-characters", report)
+                delivery = setup.exchange(gateway, credential, report)["configuration"]
+                self.assertEqual(delivery, body)
+                with connect() as connection:
+                    encrypted = connection.execute(
+                        "SELECT encrypted_wifi FROM caughtin4k.gateway_setup WHERE gateway_id = %s", (gateway,),
+                    ).fetchone()["encrypted_wifi"]
+                self.assertNotIn(body["password"], encrypted)
+                applied = setup.SetupReport(
+                    request_id=body["request_id"], checks=dict.fromkeys(setup.CHECKS, True),
+                )
+                self.assertIsNone(setup.exchange(gateway, credential, applied)["configuration"])
+                self.assertTrue(setup.read_setup(account, home, gateway)["ready"])
+                with connect() as connection:
+                    self.assertIsNone(connection.execute(
+                        "SELECT encrypted_wifi FROM caughtin4k.gateway_setup WHERE gateway_id = %s", (gateway,),
+                    ).fetchone()["encrypted_wifi"])
+                setup.configure_wifi(account, home, gateway, {**body, "request_id": str(uuid4())})
+                with self.assertRaises(HTTPException):
+                    setup.configure_wifi(account, home, gateway, body)
+                with connect() as connection:
+                    connection.execute(
+                        "UPDATE caughtin4k.gateway_setup SET expires_at = now() - interval '1 second' "
+                        "WHERE gateway_id = %s", (gateway,),
+                    )
+                self.assertIsNone(setup.exchange(gateway, credential, applied)["configuration"])
+                self.assertTrue(setup.read_setup(account, home, gateway)["expired"])
+            finally:
+                with connect() as connection:
+                    if gateway is not None:
+                        connection.execute("DELETE FROM caughtin4k.gateways WHERE id = %s", (gateway,))
+                    if home is not None:
+                        connection.execute(
+                            "DELETE FROM caughtin4k.household_members WHERE household_id = %s", (home,),
+                        )
+                        connection.execute("DELETE FROM caughtin4k.households WHERE id = %s", (home,))
+                    if account is not None:
+                        connection.execute("DELETE FROM caughtin4k.accounts WHERE id = %s", (account,))
+
     def test_customer_email_proof_recovery_revocation_and_shared_limits(self):
         check_schema()
         account_id = None

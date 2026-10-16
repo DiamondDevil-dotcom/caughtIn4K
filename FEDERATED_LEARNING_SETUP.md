@@ -49,6 +49,86 @@ Pi's labeled CSV remains on the Pi unless someone copies it manually.
 
 ## Customer app and website rollout
 
+### Consumer appliance onboarding (opt-in)
+
+Consumer gateways use Ethernet and power, then a verified Sentra account,
+the unit's one-use ownership QR, and the in-app IoT Wi-Fi setup screen.
+Existing gateways default to `consumer_setup=false` and retain their current
+networking and selection behavior. Website users can pair and monitor; Wi-Fi
+setup requires the updated Sentra app.
+
+Deploy in this order:
+
+1. Apply/check additive database migrations through schema **9** using
+   `Backend/Backend/cloud_database.py init` with a privately entered database URL.
+   Run the opt-in database integration tests before publishing the new backend.
+2. Install `requirements_cloud.txt`. Set `GHOST_CLOUD_SETUP_ENABLED=true` and a
+   generated Fernet `GHOST_CLOUD_SETUP_KEY` privately on the backend. Keep the
+   key stable across instances and restarts; never include it in an image,
+   client app, QR or public environment variable. Missing setup configuration
+   fails closed without enabling this flow for existing gateways.
+3. Provision each new unit with `provision_cloud_gateway.py --consumer-setup`
+   and its own explicit pairing expiry and private output directory outside Git.
+   Never copy an existing Pi's machine credential or clone a personalized image.
+4. Publish the updated Sentra app after the backend is compatible.
+
+Wi-Fi settings are encrypted at rest and delivered through the gateway's
+authenticated outbound HTTPS connection. Pending delivery expires in 15 minutes.
+Applied-revision acknowledgement removes the encrypted password; expired
+ciphertext is scrubbed on subsequent setup reads/exchanges. No background purge
+job is included. The Pi retains the password only in NetworkManager's root-only
+keyfile, separate from its password-free applied-revision state.
+
+Ready requires a matching applied revision and a report within 45 seconds
+confirming Ethernet, the requested Wi-Fi AP, router API, loaded model and firewall
+objects. Failed or stale checks do not permit entering home as ready. These
+checks do not certify detection accuracy or a client's DHCP/DNS/Internet access.
+Request IDs are payload-bound and superseded attempts cannot be replayed.
+
+#### Generic image and per-device personalization
+
+`router_setup/consumer_image` is an ARM64 Trixie pi-gen stage after stage2,
+not an installer to run on an existing Pi. It requires trusted source, an
+approved 14-feature model and SHA-256, audited ARM64 CPython 3.13 wheels and a
+sales-region Wi-Fi country code. Use the official CPU PyTorch wheel
+`torch==2.13.0+cpu`, not a CUDA build. The installer verifies the model and
+loads it, disables SSH, locks accounts and removes cloud-init.
+
+The reusable base image contains no device identity or saved Wi-Fi connection.
+Four services wait for `/etc/caughtin4k/device.env`. After flashing, mount the
+spare card's Linux root partition offline and run, as root:
+
+```bash
+python3 router_setup/personalize_consumer.py --root <mounted-root> --bundle <private-bundle>
+```
+
+Personalization creates a root-only device environment and fresh local API
+token. It reserves the bundle before writing identity and refuses existing
+identity files or reused bundles. A partial failure requires reconciliation;
+do not delete reservations and retry blindly. Give customers only the matching
+ownership label, never the machine environment. The image is inference-only:
+capture defaults to observe and cloud training must remain disabled.
+
+The base image passed integrity, configuration and emulated ARM64 model
+inference checks and was flashed with read-back verification on a spare card.
+Physical boot, Cortex-A53 compatibility, pairing, AP DHCP/DNS/NAT, network
+controls and reboot/power-loss tests remain acceptance requirements.
+
+#### Lost ownership labels
+
+Pairing consumes the gateway-specific QR secret. After pairing, sign in to
+the existing household; the old label must not pair again. Before pairing,
+replacement requires a manufacturer-verified purchase/order linked to the
+signed-in account's verified email. Provision such bindings with both
+`--verified-order` and `--purchaser-email`; never invent a purchase binding for
+a demo unit.
+
+The app and website accept an order reference at
+`/cloud/gateways/replace-setup-qr`. Rotation invalidates earlier labels before
+email delivery. A delivery failure is explicit and does not restore an earlier
+QR. Paired/revoked units and mismatched emails are ineligible. Replacement QR
+validity is 24 hours; requests are rate limited.
+
 ### New Pi setup QR copies
 
 The mobile **Scan Pi setup QR** screen supports camera scanning and

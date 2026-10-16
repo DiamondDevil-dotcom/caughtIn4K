@@ -19,6 +19,7 @@ import cloud_monitoring as monitoring
 import cloud_commands as commands
 import cloud_account_security as security
 import cloud_push
+import cloud_gateway_setup as setup
 import cloud_assistant
 from cloud_database import CloudDatabaseError
 
@@ -31,13 +32,13 @@ class LoginInput(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
-class SignupInput(LoginInput):
-    name: str = Field(min_length=1, max_length=200)
-
-
 class AssistantInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     message: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+
+
+class SignupInput(LoginInput):
+    name: str = Field(min_length=1, max_length=200)
 
 
 class SetupQrInput(BaseModel):
@@ -48,6 +49,11 @@ class SetupQrInput(BaseModel):
 
 class PairGatewayInput(SetupQrInput):
     household_name: str = Field(min_length=1, max_length=200)
+
+
+class RecoverSetupQrInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    order_reference: str = Field(min_length=1, max_length=200)
 
 
 class InviteInput(BaseModel):
@@ -182,6 +188,13 @@ def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
             payload.pairing_code, payload.household_name,
         )
 
+    @router.post("/gateways/replace-setup-qr")
+    async def replace_setup_qr(payload: RecoverSetupQrInput, account=Depends(current_account)):
+        if account.get("email_verified_at") is None:
+            raise HTTPException(status_code=403, detail="Verify your email before requesting a setup QR.")
+        await operation(security.limit, "replace-setup-qr:" + str(account["id"]), secret, 3, 900)
+        return await operation(security.replace_setup_qr, account["id"], payload.order_reference)
+
     @router.post("/gateways/email-setup-qr")
     async def email_setup_qr(payload: SetupQrInput, account=Depends(current_account)):
         if account.get("email_verified_at") is None:
@@ -247,5 +260,22 @@ def build_router(secret: str, *, require_verified: bool = False) -> APIRouter:
         credential: str = Header(default="", alias="X-Gateway-Credential", max_length=256),
     ):
         return await operation(commands.complete_command, gateway_id, credential, command_id, payload)
+
+    @router.get("/households/{household_id}/gateways/{gateway_id}/setup")
+    async def read_setup(household_id: UUID, gateway_id: UUID, account=Depends(current_account)):
+        return await operation(setup.read_setup, account["id"], household_id, gateway_id)
+
+    @router.put("/households/{household_id}/gateways/{gateway_id}/setup")
+    async def configure_setup(
+        household_id: UUID, gateway_id: UUID, payload: dict, account=Depends(current_account),
+    ):
+        return await operation(setup.configure_wifi, account["id"], household_id, gateway_id, payload)
+
+    @router.post("/gateways/{gateway_id}/setup/exchange")
+    async def setup_exchange(
+        gateway_id: UUID, payload: setup.SetupReport,
+        credential: str = Header(default="", alias="X-Gateway-Credential", max_length=256),
+    ):
+        return await operation(setup.exchange, gateway_id, credential, payload)
 
     return router
